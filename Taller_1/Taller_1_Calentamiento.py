@@ -436,3 +436,7 @@ plt.close(fig)
 print(f"PDF guardado en {dir_pdf_c}")
 
 
+#Mañana optimizo el punto 2 y coninuo con el bono
+
+
+
