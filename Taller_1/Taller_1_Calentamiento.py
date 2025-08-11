@@ -48,13 +48,13 @@ import pandas as pd
 #                 })
 
 
-folders = ["Mo_unfiltered_10kV-50kV", "Rh_unfiltered_10kV-50kV", "W_unfiltered_10kV-50kV"]
 data_dictionary = {}
-
+data_dir = os.path.dirname(os.path.realpath('__file__')) + '/Taller_1/'
+folders = [data_dir + "Mo_unfiltered_10kV-50kV",data_dir + "Rh_unfiltered_10kV-50kV", data_dir + "W_unfiltered_10kV-50kV"]
 for i in folders:
-    data_dictionary[i] = {}
+    data_dictionary[i[90:]] = {}
     files_of_i = os.listdir(i)  # Devuelve una lista con los nombres de todos los archivos ["Elemento_1", "Elemento_2",...,"Elemento_n"]
-                                # files_of_i ["Mo_10kV.dat", "Mo_11kV.dat",..., "Mo_50kV.dat"]
+                # files_of_i ["Mo_10kV.dat", "Mo_11kV.dat",..., "Mo_50kV.dat"]
     files_of_i.sort() #Organizar la lista anterior
 
     for j in files_of_i:
@@ -88,7 +88,7 @@ for i in folders:
         
             dataframe.columns = ["energy", "fluence"]
 
-            data_dictionary[i][j] = {"dataframe": dataframe,
+            data_dictionary[i[90:]][j] = {"dataframe": dataframe,
                                     "anode": anode,
                                     "anode_angle": anode_angle,
                                     "inherent_filtration": inherent_filtration
@@ -96,7 +96,7 @@ for i in folders:
 
 #Prints para tener mas claro que es lo que esta arrojando el codigo
 
-#print(data_dictionary["W_unfiltered_10kV-50kV"])
+
 #print(data_dictionary["W_unfiltered_10kV-50kV"]["W_17kV.dat"])
 print(data_dictionary["W_unfiltered_10kV-50kV"]["W_17kV.dat"]["inherent_filtration"])
 
