@@ -340,8 +340,6 @@ print(f"PDF guardado en {dir_pdf_b}")
 
 
 #2.c. Analizar el continuo 
-# 2.c. Analizar el continuo
-
 def calcular_fwhm(x, y):
     y_max = np.max(y)
     half_max = y_max / 2
