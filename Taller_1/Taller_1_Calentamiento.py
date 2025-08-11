@@ -253,9 +253,6 @@ print(f"PDF guardado en: {dir_pdf}")
 
 
 #2.b. Aproximar el continuo
-# 2.b. Aproximar el continuo y guardar los datos del ajuste spline
-from scipy.interpolate import UnivariateSpline
-
 def ajustar_continuo_spline(df_sin_picos, s=2):
     x = df_sin_picos["energy"].values
     y = df_sin_picos["fluence"].values
@@ -264,7 +261,7 @@ def ajustar_continuo_spline(df_sin_picos, s=2):
     return x, y_fit
 
 dir_pdf_b = os.path.join(data_dir, "2.b.pdf")
-datos_continuo = {}  # <--- Aquí se guardarán los resultados
+registros_continuo = []  # Lista para ir almacenando filas del DataFrame
 
 with PdfPages(dir_pdf_b) as pdf:
     for element_key, content in datos.items():
@@ -281,8 +278,6 @@ with PdfPages(dir_pdf_b) as pdf:
             kvs = list(df_elemento['kv'].unique())[:3]
         while len(kvs) < 3:
             kvs.append(None)
-
-        datos_continuo[element_key] = {}  # Inicializa para este elemento
 
         fig, axs = plt.subplots(3, 3, figsize=(15, 10))
         fig.suptitle(f"Ajuste del continuo - {element_key.split('_')[0]}", fontsize=16)
@@ -302,29 +297,31 @@ with PdfPages(dir_pdf_b) as pdf:
                     axs[r, col_idx].set_yticks([])
                 continue
 
+            # Remover picos
             df_sin, _ = remover_picos(df_kv, altura_min=2.0, distancia_min=3, rel_height=0.5, ancho_max=10)
             x_fit, y_fit = ajustar_continuo_spline(df_sin, s=2)
 
-            # Guarda los datos del ajuste continuo para este elemento y kV
-            datos_continuo[element_key][kv] = {
-                "energy": x_fit,
-                "spline": y_fit,
-                "df_sin": df_sin
-            }
+            # Agregar registros para el DataFrame
+            for xi, yi, yorig in zip(x_fit, y_fit, df_sin["fluence"].values):
+                registros_continuo.append({
+                    "elemento": element_key.split('_')[0],
+                    "kv": kv,
+                    "energy": xi,
+                    "fluence_sin_picos": yorig,
+                    "fluence_continuo": yi
+                })
 
-            # Fila 1: solo datos sin picos
+            # Graficar
             axs[0, col_idx].plot(df_sin["energy"], df_sin["fluence"], color="blue")
             axs[0, col_idx].set_title(f"{element_key.split('_')[0]}_{kv}\nSin picos")
             axs[0, col_idx].set_xlabel("Energía (keV)")
             axs[0, col_idx].set_ylabel("Intensidad")
 
-            # Fila 2: solo ajuste
             axs[1, col_idx].plot(x_fit, y_fit, color="orange")
             axs[1, col_idx].set_title("Ajuste spline")
             axs[1, col_idx].set_xlabel("Energía (keV)")
             axs[1, col_idx].set_ylabel("Intensidad")
 
-            # Fila 3: comparación
             axs[2, col_idx].plot(df_sin["energy"], df_sin["fluence"], color="blue", label="Sin picos")
             axs[2, col_idx].plot(x_fit, y_fit, color="orange", label="Ajuste")
             axs[2, col_idx].set_title("Comparación")
@@ -336,33 +333,38 @@ with PdfPages(dir_pdf_b) as pdf:
         pdf.savefig(fig, bbox_inches="tight", pad_inches=0.1)
         plt.close(fig)
 
+# Convertir a DataFrame
+datos_continuo = pd.DataFrame(registros_continuo)
+
 print(f"PDF guardado en {dir_pdf_b}")
+print("DataFrame datos_continuo creado con forma:", datos_continuo.shape)
 
 
 #2.c. Analizar el continuo 
 def calcular_fwhm(x, y):
     y_max = np.max(y)
     half_max = y_max / 2
-    # Encuentra los cruces con la media altura
     indices = np.where(y >= half_max)[0]
     if len(indices) < 2:
-        return np.nan  # No se puede calcular FWHM
+        return np.nan
     left_idx = indices[0]
     right_idx = indices[-1]
-    # Interpolación lineal para mayor precisión
+
     def interp(idx1, idx2):
         return x[idx1] + (half_max - y[idx1]) * (x[idx2] - x[idx1]) / (y[idx2] - y[idx1])
-    # Buscar el cruce a la izquierda
+
     if left_idx > 0:
-        x_left = interp(left_idx-1, left_idx)
+        x_left = interp(left_idx - 1, left_idx)
     else:
         x_left = x[left_idx]
-    # Buscar el cruce a la derecha
-    if right_idx < len(x)-1:
-        x_right = interp(right_idx, right_idx+1)
+
+    if right_idx < len(x) - 1:
+        x_right = interp(right_idx, right_idx + 1)
     else:
         x_right = x[right_idx]
+
     return x_right - x_left
+
 
 # Diccionario para guardar resultados
 resultados = {
@@ -374,24 +376,24 @@ resultados = {
     "fwhm": []
 }
 
-for element_key in datos_continuo:
-    elemento = element_key.split('_')[0]
-    for kv in datos_continuo[element_key]:
-        ajuste = datos_continuo[element_key][kv]
-        x = ajuste["energy"]
-        y = ajuste["spline"]
-        if len(x) == 0 or len(y) == 0:
-            continue
-        idx_max = np.argmax(y)
-        maximo = y[idx_max]
-        energia_max = x[idx_max]
-        fwhm = calcular_fwhm(x, y)
-        resultados["elemento"].append(elemento)
-        resultados["kv"].append(kv)
-        resultados["voltaje"].append(float(kv.replace("kV", "")))
-        resultados["maximo"].append(maximo)
-        resultados["energia_max"].append(energia_max)
-        resultados["fwhm"].append(fwhm)
+# Recorrer por cada elemento y kV en el DataFrame
+for (elemento, kv), df_kv in datos_continuo.groupby(["elemento", "kv"]):
+    x = df_kv["energy"].values
+    y = df_kv["fluence_continuo"].values  # usamos el ajuste continuo
+    if len(x) == 0 or len(y) == 0:
+        continue
+
+    idx_max = np.argmax(y)
+    maximo = y[idx_max]
+    energia_max = x[idx_max]
+    fwhm = calcular_fwhm(x, y)
+
+    resultados["elemento"].append(elemento)
+    resultados["kv"].append(kv)
+    resultados["voltaje"].append(float(kv.replace("kV", "")))
+    resultados["maximo"].append(maximo)
+    resultados["energia_max"].append(energia_max)
+    resultados["fwhm"].append(fwhm)
 
 # Convertir a DataFrame para graficar
 df_res = pd.DataFrame(resultados)
@@ -403,30 +405,30 @@ colores = {"Mo": "tab:blue", "Rh": "tab:orange", "W": "tab:green"}
 
 for elemento in df_res["elemento"].unique():
     df_e = df_res[df_res["elemento"] == elemento]
-    axs[0,0].plot(df_e["voltaje"], df_e["maximo"], marker='o', label=elemento, color=colores[elemento])
-    axs[0,1].plot(df_e["voltaje"], df_e["energia_max"], marker='o', label=elemento, color=colores[elemento])
-    axs[1,0].plot(df_e["voltaje"], df_e["fwhm"], marker='o', label=elemento, color=colores[elemento])
-    axs[1,1].plot(df_e["energia_max"], df_e["maximo"], marker='o', label=elemento, color=colores[elemento])
+    axs[0, 0].plot(df_e["voltaje"], df_e["maximo"], marker='o', label=elemento, color=colores[elemento])
+    axs[0, 1].plot(df_e["voltaje"], df_e["energia_max"], marker='o', label=elemento, color=colores[elemento])
+    axs[1, 0].plot(df_e["voltaje"], df_e["fwhm"], marker='o', label=elemento, color=colores[elemento])
+    axs[1, 1].plot(df_e["energia_max"], df_e["maximo"], marker='o', label=elemento, color=colores[elemento])
 
-axs[0,0].set_title("Máximo del continuo vs Voltaje")
-axs[0,0].set_xlabel("Voltaje (kV)")
-axs[0,0].set_ylabel("Máximo del continuo")
-axs[0,0].legend()
+axs[0, 0].set_title("Máximo del continuo vs Voltaje")
+axs[0, 0].set_xlabel("Voltaje (kV)")
+axs[0, 0].set_ylabel("Máximo del continuo")
+axs[0, 0].legend()
 
-axs[0,1].set_title("Energía del máximo vs Voltaje")
-axs[0,1].set_xlabel("Voltaje (kV)")
-axs[0,1].set_ylabel("Energía del máximo (keV)")
-axs[0,1].legend()
+axs[0, 1].set_title("Energía del máximo vs Voltaje")
+axs[0, 1].set_xlabel("Voltaje (kV)")
+axs[0, 1].set_ylabel("Energía del máximo (keV)")
+axs[0, 1].legend()
 
-axs[1,0].set_title("FWHM vs Voltaje")
-axs[1,0].set_xlabel("Voltaje (kV)")
-axs[1,0].set_ylabel("FWHM (keV)")
-axs[1,0].legend()
+axs[1, 0].set_title("FWHM vs Voltaje")
+axs[1, 0].set_xlabel("Voltaje (kV)")
+axs[1, 0].set_ylabel("FWHM (keV)")
+axs[1, 0].legend()
 
-axs[1,1].set_title("Máximo del continuo vs Energía del máximo")
-axs[1,1].set_xlabel("Energía del máximo (keV)")
-axs[1,1].set_ylabel("Máximo del continuo")
-axs[1,1].legend()
+axs[1, 1].set_title("Máximo del continuo vs Energía del máximo")
+axs[1, 1].set_xlabel("Energía del máximo (keV)")
+axs[1, 1].set_ylabel("Máximo del continuo")
+axs[1, 1].legend()
 
 plt.tight_layout()
 plt.savefig(dir_pdf_c, bbox_inches="tight", pad_inches=0.1)
