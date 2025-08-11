@@ -264,7 +264,7 @@ def ajustar_continuo_spline(df_sin_picos, s=2):
     return x, y_fit
 
 dir_pdf_b = os.path.join(data_dir, "2.b.pdf")
-ajustes_spline = {}  # <--- Aquí se guardarán los resultados
+datos_continuo = {}  # <--- Aquí se guardarán los resultados
 
 with PdfPages(dir_pdf_b) as pdf:
     for element_key, content in datos.items():
@@ -282,7 +282,7 @@ with PdfPages(dir_pdf_b) as pdf:
         while len(kvs) < 3:
             kvs.append(None)
 
-        ajustes_spline[element_key] = {}  # Inicializa para este elemento
+        datos_continuo[element_key] = {}  # Inicializa para este elemento
 
         fig, axs = plt.subplots(3, 3, figsize=(15, 10))
         fig.suptitle(f"Ajuste del continuo - {element_key.split('_')[0]}", fontsize=16)
@@ -305,8 +305,8 @@ with PdfPages(dir_pdf_b) as pdf:
             df_sin, _ = remover_picos(df_kv, altura_min=2.0, distancia_min=3, rel_height=0.5, ancho_max=10)
             x_fit, y_fit = ajustar_continuo_spline(df_sin, s=3)
 
-            # Guarda los datos del ajuste spline para este elemento y kV
-            ajustes_spline[element_key][kv] = {
+            # Guarda los datos del ajuste continuo para este elemento y kV
+            datos_continuo[element_key][kv] = {
                 "energy": x_fit,
                 "spline": y_fit,
                 "df_sin": df_sin
@@ -374,10 +374,10 @@ resultados = {
     "fwhm": []
 }
 
-for element_key in ajustes_spline:
+for element_key in datos_continuo:
     elemento = element_key.split('_')[0]
-    for kv in ajustes_spline[element_key]:
-        ajuste = ajustes_spline[element_key][kv]
+    for kv in datos_continuo[element_key]:
+        ajuste = datos_continuo[element_key][kv]
         x = ajuste["energy"]
         y = ajuste["spline"]
         if len(x) == 0 or len(y) == 0:
