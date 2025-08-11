@@ -303,7 +303,7 @@ with PdfPages(dir_pdf_b) as pdf:
                 continue
 
             df_sin, _ = remover_picos(df_kv, altura_min=2.0, distancia_min=3, rel_height=0.5, ancho_max=10)
-            x_fit, y_fit = ajustar_continuo_spline(df_sin, s=3)
+            x_fit, y_fit = ajustar_continuo_spline(df_sin, s=2)
 
             # Guarda los datos del ajuste continuo para este elemento y kV
             datos_continuo[element_key][kv] = {
@@ -436,5 +436,5 @@ print(f"PDF guardado en {dir_pdf_c}")
 
 #Mañana optimizo el punto 2 y coninuo con el bono
 
-
+print(datos_continuo)
 
