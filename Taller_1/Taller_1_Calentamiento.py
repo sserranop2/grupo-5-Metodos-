@@ -8,7 +8,7 @@ from matplotlib.backends.backend_pdf import PdfPages
 from scipy.interpolate import UnivariateSpline
 
 
-
+#s
 #Introduccion al experimento:
 #Cuando una fuente de rayos X emite radiación, no todos los rayos tienen la misma energía. En vez de eso, se emiten 
 #muchos fotones (partículas de luz) con diferentes niveles de energía.
