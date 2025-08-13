@@ -131,12 +131,14 @@ for folder in folders:
 #Punto 2 - Comportamiento del continuo (Bremsstrahlung)
 
 # 2.a. Remover los picos
+datos_sin_picos = [] # Creamos un Dataframe de los datos sin picos para ser usados en el punto B y posteriores
+
 def remover_picos(df, altura_min=2.0, distancia_min=3, rel_height=0.8, ancho_max=10):
     fluencia = df["fluence"].values
     picos, _ = find_peaks(fluencia, height=altura_min, distance=distancia_min)
     results_half = peak_widths(fluencia, picos, rel_height=rel_height)
     indices_a_eliminar = set()
-    for i in enumerate(picos):
+    for i, picos in enumerate(picos):
         left = int(np.floor(results_half[2][i]))
         right = int(np.ceil(results_half[3][i]))
         if (right - left) <= ancho_max:  # eliminar solo si ancho <= ancho_max
@@ -149,12 +151,10 @@ def remover_picos(df, altura_min=2.0, distancia_min=3, rel_height=0.8, ancho_max
 
 dir_pdf = os.path.join(data_dir, "2.a.pdf")
 
-#La funcion PDFPages permite guardar las graficas en un archivo PDF.
+#La funcion PDFPages permite guardar varias graficas en un solo archivo PDF.
 with PdfPages(dir_pdf) as pdf:
     for element_key, content in datos.items():
         df_elemento = content["dataframe"].copy()
-
-        # Obtener los kV seleccionados SOLO para graficar
         kvs = selected_kv.get(element_key, list(df_elemento['kv'].unique())[:3])
         while len(kvs) < 3:
             kvs.append(None)
@@ -177,8 +177,16 @@ with PdfPages(dir_pdf) as pdf:
                     axs[r, col_idx].set_yticks([])
                 continue
 
-            df_sin, df_picos = remover_picos(df_kv, altura_min=2.0, distancia_min=3,
-                                             rel_height=0.5, ancho_max=10)
+            df_sin, df_picos = remover_picos(df_kv, altura_min=2.0, distancia_min=3, rel_height=0.5, ancho_max=10)
+
+            # Guardar en registros_sin_picos
+            for i, row in df_sin.iterrows():
+                datos_sin_picos.append({
+                    "elemento": element_key.split('_')[0],
+                    "kv": kv,
+                    "energy": row["energy"],
+                    "fluence_sin_picos": row["fluence"]
+                })
 
             # FILA 1: original con picos
             ax = axs[0, col_idx]
@@ -215,41 +223,44 @@ with PdfPages(dir_pdf) as pdf:
         pdf.savefig(fig, bbox_inches='tight', pad_inches=0.1)
         plt.close(fig)
 
+# DataFrame con todos los datos sin picos
+df_sin_picos = pd.DataFrame(datos_sin_picos)
 
 
 #2.b. Aproximar el continuo
+# -------- 2.b. Aproximar el continuo (mismo FORMATO que 2.a) --------
 def aproximacion_rbf(df_sin_picos, function='quintic', smooth=5, smooth_window=9, polyorder=1):
     x = df_sin_picos["energy"].values
-    y = df_sin_picos["fluence"].values
+    y = df_sin_picos["fluence_sin_picos"].values
 
-    # Suavizado previo
+    # Suavizado previo para evitar que el ruido distorsione el RBF
     if len(y) >= smooth_window:
         y_suave = savgol_filter(y, smooth_window, polyorder)
     else:
         y_suave = y
 
-    # Ajuste RBF suave
     rbf = Rbf(x, y_suave, function=function, smooth=smooth)
     y_fit = rbf(x)
-
     return x, y_fit
 
-
-# PDF
+datos_continuo = []  # aquí sí guardamos el continuo calculado
 dir_pdf_b = os.path.join(data_dir, "2.b.pdf")
-registros_continuo = []  # Lista para el DataFrame con los datos aproximados
 
 with PdfPages(dir_pdf_b) as pdf:
+    # Recorremos con la MISMA clave que en 2.a para que coincidan columnas/orden
     for element_key, content in datos.items():
-        df_elemento = content["dataframe"].copy()
-
-        # kV seleccionados SOLO para graficar
-        kvs = selected_kv.get(element_key, list(df_elemento['kv'].unique())[:3])
+        elemento_corto = element_key.split('_')[0]
+        # usar selected_kv con la MISMA clave 'element_key' (no con 'Mo/Rh/W')
+        kvs = selected_kv.get(
+            element_key,
+            list(df_sin_picos[df_sin_picos["elemento"] == elemento_corto]["kv"].unique())[:3]
+        )
         while len(kvs) < 3:
             kvs.append(None)
 
         fig, axs = plt.subplots(3, 3, figsize=(15, 10))
-        fig.suptitle(f"Ajuste del continuo (RBF) - {element_key.split('_')[0]}", fontsize=16)
+        # Supertítulo con el mismo tamaño que 2.a (puedes dejar el texto que prefieras)
+        fig.suptitle(f"Ajuste del continuo (RBF) - {elemento_corto}", fontsize=16)
 
         for col_idx, kv in enumerate(kvs):
             if kv is None:
@@ -257,58 +268,64 @@ with PdfPages(dir_pdf_b) as pdf:
                     axs[r, col_idx].axis('off')
                 continue
 
-            df_kv = df_elemento[df_elemento["kv"] == kv].copy().reset_index(drop=True)
-            if df_kv.empty:
+            # Filtramos del DF "2.a" ya sin picos
+            df_sin = df_sin_picos[
+                (df_sin_picos["elemento"] == elemento_corto) & (df_sin_picos["kv"] == kv)
+            ]
+            if df_sin.empty:
                 for r in range(3):
-                    axs[r, col_idx].text(0.5, 0.5, f"No hay datos para {element_key.split('_')[0]}_{kv}",
+                    axs[r, col_idx].text(0.5, 0.5, f"No hay datos para {elemento_corto}_{kv}",
                                          ha='center', va='center')
                     axs[r, col_idx].set_xticks([])
                     axs[r, col_idx].set_yticks([])
                 continue
 
-            # Remover picos
-            df_sin, _ = remover_picos(df_kv, altura_min=2.0, distancia_min=3,
-                                      rel_height=0.5, ancho_max=10)
-
-            # Ajuste con RBF y suavizado
             x_fit, y_fit = aproximacion_rbf(df_sin)
 
-            # Guardar en la base de datos
-            for xi, yi, yorig in zip(x_fit, y_fit, df_sin["fluence"].values):
-                registros_continuo.append({
-                    "elemento": element_key.split('_')[0],
+            # --- Guardar continuo para análisis posteriores ---
+            for xi, yi, yorig in zip(df_sin["energy"].values, y_fit, df_sin["fluence_sin_picos"].values):
+                datos_continuo.append({
+                    "elemento": elemento_corto,
                     "kv": kv,
                     "energy": xi,
                     "fluence_sin_picos": yorig,
                     "fluence_continuo": yi
                 })
 
-            # FILA 1: sin picos
-            axs[0, col_idx].plot(df_sin["energy"], df_sin["fluence"], color="blue")
-            axs[0, col_idx].set_title(f"{element_key.split('_')[0]}_{kv}\nSin picos")
-            axs[0, col_idx].set_xlabel("Energía (keV)")
-            axs[0, col_idx].set_ylabel("Intensidad")
+            # --- FILA 1: datos sin picos ---
+            ax = axs[0, col_idx]
+            ax.plot(df_sin["energy"], df_sin["fluence_sin_picos"], color="blue")
+            ax.set_title(f"{elemento_corto}_{kv}")  # igual que 2.a: título solo en fila 1
+            if col_idx == 0:
+                ax.set_ylabel("Sin picos\nIntensidad")
+            ax.set_xlabel("Energía (keV)")
 
-            # FILA 2: solo ajuste
-            axs[1, col_idx].plot(x_fit, y_fit, color="orange")
-            axs[1, col_idx].set_title("Ajuste RBF suavizado")
-            axs[1, col_idx].set_xlabel("Energía (keV)")
-            axs[1, col_idx].set_ylabel("Intensidad")
+            # --- FILA 2: solo continuo ---
+            ax = axs[1, col_idx]
+            ax.plot(df_sin["energy"], y_fit, color="orange", label="Continuo")
+            if col_idx == 0:
+                ax.set_ylabel("Continuo (RBF)\nIntensidad")
+            ax.set_xlabel("Energía (keV)")
+            if col_idx == 2:
+                ax.legend(fontsize=8)
 
-            # FILA 3: comparación
-            axs[2, col_idx].plot(df_sin["energy"], df_sin["fluence"], color="blue", label="Sin picos")
-            axs[2, col_idx].plot(x_fit, y_fit, color="orange", label="Ajuste")
-            axs[2, col_idx].set_title("Comparación")
-            axs[2, col_idx].set_xlabel("Energía (keV)")
-            axs[2, col_idx].set_ylabel("Intensidad")
-            axs[2, col_idx].legend()
+            # --- FILA 3: comparación (dos curvas sobrepuestas) ---
+            ax = axs[2, col_idx]
+            ax.plot(df_sin["energy"], df_sin["fluence_sin_picos"], color="blue", label="Sin picos")
+            ax.plot(df_sin["energy"], y_fit, color="orange", label="Continuo")
+            if col_idx == 2:
+                ax.legend()
+            if col_idx == 0:
+                ax.set_ylabel("Comparación\nIntensidad")
+            ax.set_xlabel("Energía (keV)")
 
         plt.tight_layout(rect=[0, 0, 1, 0.96])
         pdf.savefig(fig, bbox_inches="tight", pad_inches=0.1)
         plt.close(fig)
 
-# Crear DataFrame con los datos de la aproximacion de la "barriga"
-datos_continuo = pd.DataFrame(registros_continuo)
+# DataFrame con los datos de la aproximacion continua
+datos_continuo = pd.DataFrame(datos_continuo)
+
 
 
 #2.c. Analizar el continuo 
