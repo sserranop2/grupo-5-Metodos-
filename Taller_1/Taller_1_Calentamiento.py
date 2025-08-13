@@ -9,6 +9,7 @@ from scipy.interpolate import Rbf
 from scipy.signal import savgol_filter
 
 
+
 #Introduccion al experimento:
 #Cuando una fuente de rayos X emite radiación, no todos los rayos tienen la misma energía. En vez de eso, se emiten 
 #muchos fotones (partículas de luz) con diferentes niveles de energía.
@@ -135,7 +136,7 @@ def remover_picos(df, altura_min=2.0, distancia_min=3, rel_height=0.8, ancho_max
     picos, _ = find_peaks(fluencia, height=altura_min, distance=distancia_min)
     results_half = peak_widths(fluencia, picos, rel_height=rel_height)
     indices_a_eliminar = set()
-    for i, pico in enumerate(picos):
+    for i in enumerate(picos):
         left = int(np.floor(results_half[2][i]))
         right = int(np.ceil(results_half[3][i]))
         if (right - left) <= ancho_max:  # eliminar solo si ancho <= ancho_max
@@ -148,6 +149,7 @@ def remover_picos(df, altura_min=2.0, distancia_min=3, rel_height=0.8, ancho_max
 
 dir_pdf = os.path.join(data_dir, "2.a.pdf")
 
+#La funcion PDFPages permite guardar las graficas en un archivo PDF.
 with PdfPages(dir_pdf) as pdf:
     for element_key, content in datos.items():
         df_elemento = content["dataframe"].copy()
@@ -188,7 +190,7 @@ with PdfPages(dir_pdf) as pdf:
                 ax.set_ylabel("Original\nIntensidad")
             ax.set_xlabel("Energía (keV)")
 
-            # FILA 2: sin picos
+            # FILA 2: Datos sin picos
             ax = axs[1, col_idx]
             ax.plot(df_sin['energy'], df_sin['fluence'], color='blue', linewidth=0.9, label='Sin picos')
             if col_idx == 0:
@@ -197,7 +199,7 @@ with PdfPages(dir_pdf) as pdf:
             if col_idx == 2:
                 ax.legend(fontsize=8)
 
-            # FILA 3: comparación
+            # FILA 3: comparación de datos
             ax = axs[2, col_idx]
             ax.plot(df_kv['energy'], df_kv['fluence'], color='black', alpha=0.6, label='Original')
             ax.plot(df_sin['energy'], df_sin['fluence'], color='blue', label='Sin picos')
@@ -216,7 +218,7 @@ with PdfPages(dir_pdf) as pdf:
 
 
 #2.b. Aproximar el continuo
-def ajustar_continuo_rbf(df_sin_picos, function='quintic', smooth=5, smooth_window=9, polyorder=1):
+def aproximacion_rbf(df_sin_picos, function='quintic', smooth=5, smooth_window=9, polyorder=1):
     x = df_sin_picos["energy"].values
     y = df_sin_picos["fluence"].values
 
@@ -233,9 +235,9 @@ def ajustar_continuo_rbf(df_sin_picos, function='quintic', smooth=5, smooth_wind
     return x, y_fit
 
 
-# --- PDF de salida ---
+# PDF
 dir_pdf_b = os.path.join(data_dir, "2.b.pdf")
-registros_continuo = []  # Lista para el DataFrame final
+registros_continuo = []  # Lista para el DataFrame con los datos aproximados
 
 with PdfPages(dir_pdf_b) as pdf:
     for element_key, content in datos.items():
@@ -269,7 +271,7 @@ with PdfPages(dir_pdf_b) as pdf:
                                       rel_height=0.5, ancho_max=10)
 
             # Ajuste con RBF y suavizado
-            x_fit, y_fit = ajustar_continuo_rbf(df_sin)
+            x_fit, y_fit = aproximacion_rbf(df_sin)
 
             # Guardar en la base de datos
             for xi, yi, yorig in zip(x_fit, y_fit, df_sin["fluence"].values):
@@ -305,7 +307,7 @@ with PdfPages(dir_pdf_b) as pdf:
         pdf.savefig(fig, bbox_inches="tight", pad_inches=0.1)
         plt.close(fig)
 
-# --- Crear DataFrame con todos los datos ---
+# Crear DataFrame con los datos de la aproximacion de la "barriga"
 datos_continuo = pd.DataFrame(registros_continuo)
 
 
@@ -327,8 +329,7 @@ def calcular_fwhm(x, y):
 
     return x_right - x_left
 
-
-# --- Cálculos usando TODOS los datos ---
+#Creamos un diccionario para los datos a calcular
 resultados = {
     "elemento": [],
     "kv": [],
@@ -359,13 +360,13 @@ for (elemento, kv), df_kv in datos_continuo.groupby(["elemento", "kv"]):
 # Convertir a DataFrame con todos los cálculos
 df_res = pd.DataFrame(resultados)
 
-# --- Crear un mapeo de claves cortas a kV seleccionados ---
+# Crear un mapeo de claves cortas a kV seleccionados en la interfaz
 selected_kv_short = {}
 for full_key, kv_list in selected_kv.items():
-    short = full_key.split("_")[0]  # ej: "Mo_unfiltered..." → "Mo"
+    short = full_key.split("_")[0]  
     selected_kv_short[short] = kv_list
 
-# --- Graficar SOLO selected_kv ---
+# Graficar SOLO selected_kv 
 dir_pdf_c = os.path.join(data_dir, "2.c.pdf")
 fig, axs = plt.subplots(2, 2, figsize=(12, 8))
 colores = {"Mo": "tab:blue", "Rh": "tab:orange", "W": "tab:green"}
