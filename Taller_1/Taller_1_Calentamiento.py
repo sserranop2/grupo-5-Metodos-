@@ -5,7 +5,8 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from scipy.signal import find_peaks, peak_widths
 from matplotlib.backends.backend_pdf import PdfPages
-from scipy.interpolate import UnivariateSpline
+from scipy.interpolate import Rbf
+from scipy.signal import savgol_filter
 
 
 #Introduccion al experimento:
@@ -66,9 +67,9 @@ folders = [
     os.path.join(data_dir, "W_unfiltered_10kV-50kV")
 ]
 
-# --- Interfaz: pedir niveles ---
-# Esto facilita el analisis de datos al no tener que elegir unicamente 3 conjuntos de archivos
-print("Selecciona 3 niveles de energía (kV) con los que quieres trabajar para cada elemento.")
+# Intefaz de selección de kV
+# Esto facilita el uso del programa dado que se puedene stuidar varios niveles de energía (kV) para cada elemento.
+print("Selecciona 3 niveles de energía (kV) con los que quieres trabajar para las gráficas.")
 print("Ejemplo: 10 20 30\n")
 selected_kv = {}
 for folder in folders:
@@ -76,7 +77,7 @@ for folder in folders:
     kvs = input(f"Ingrese 3 niveles de kV para {element_key.split('_')[0]} separados por espacio o coma: ")
     selected_kv[element_key] = [f"{int(k.strip())}kV" for k in kvs.replace(",", " ").split()]
 
-# --- Construcción de la base de datos ---
+# --- Construcción de la base de datos con TODOS los archivos ---
 datos = {}
 
 for folder in folders:
@@ -92,10 +93,6 @@ for folder in folders:
 
     for filename in files_of_i:
         if filename.endswith(".dat"):
-            # Solo procesar si el archivo coincide con uno de los kV seleccionados
-            if not any(kv in filename for kv in selected_kv[element_key]):
-                continue
-
             ruta = os.path.join(folder, filename)
 
             with open(ruta, "r", encoding="latin1") as f:
@@ -126,34 +123,22 @@ for folder in folders:
         "inherent_filtration": inherent_filtration
     }
 
-# Esto lo puse para confirmar los datos que estuvieran bien, se puede quitar despues
-for element_key, content in datos.items():
-    print(f"\n=== {element_key} ===")
-    print(content["dataframe"])
-    print(f"\nMetadatos:")
-    print(f"Anode: {content['anode']}")
-    print(f"Anode Angle: {content['anode_angle']}")
-    print(f"Inherent Filtration: {content['inherent_filtration']}")
-    print(f"Total filas: {len(content['dataframe'])}")
-
-
 
 #Punto 1
 
 
 #Punto 2 - Comportamiento del continuo (Bremsstrahlung)
 
-#2.a. Remover los picos
+# 2.a. Remover los picos
 def remover_picos(df, altura_min=2.0, distancia_min=3, rel_height=0.8, ancho_max=10):
     fluencia = df["fluence"].values
-    picos, props = find_peaks(fluencia, height=altura_min, distance=distancia_min)
+    picos, _ = find_peaks(fluencia, height=altura_min, distance=distancia_min)
     results_half = peak_widths(fluencia, picos, rel_height=rel_height)
     indices_a_eliminar = set()
     for i, pico in enumerate(picos):
         left = int(np.floor(results_half[2][i]))
         right = int(np.ceil(results_half[3][i]))
-        # Solo eliminar si el ancho no es demasiado grande
-        if (right - left) <= ancho_max:
+        if (right - left) <= ancho_max:  # eliminar solo si ancho <= ancho_max
             indices_a_eliminar.update(range(left, right + 1))
     indices_a_eliminar = [i for i in indices_a_eliminar if 0 <= i < len(df)]
     df_picos = df.iloc[indices_a_eliminar].copy()
@@ -161,46 +146,26 @@ def remover_picos(df, altura_min=2.0, distancia_min=3, rel_height=0.8, ancho_max
     return df_sin_picos, df_picos
 
 
-
-# Crear pdf en la carpeta Taller_1
-# Al usar el codigo plt.savefig("2.a.pdf", bbox_inches="tight", pad_inches=0.1) la imagen s egudraba por fuera de la carpeta, por lo cual primero creo el la direccion del archivo .pdf
 dir_pdf = os.path.join(data_dir, "2.a.pdf")
-fig, axs = plt.subplots(3, 3, figsize=(15, 10))  # 3 filas (elementos) x 3 columnas (kV)
 
 with PdfPages(dir_pdf) as pdf:
     for element_key, content in datos.items():
         df_elemento = content["dataframe"].copy()
 
-        # Obtener la lista de 3 kV en el orden deseado:
-        # Si existe selected_kv en el entorno lo uso para mantener el orden de selección.
-        kvs = None
-        if 'selected_kv' in globals():
-            # selected_kv puede tener claves con element_key o con el nombre corto (Mo). Probar ambas.
-            if element_key in selected_kv:
-                kvs = selected_kv[element_key]
-            else:
-                short = element_key.split('_')[0]
-                if short in selected_kv:
-                    kvs = selected_kv[short]
-        # fallback: tomar los 3 kV únicos que aparezcan en el dataframe
-        if kvs is None:
-            kvs = list(df_elemento['kv'].unique())[:3]
-        # asegurar longitud 3 (rellenar con None si faltan)
+        # Obtener los kV seleccionados SOLO para graficar
+        kvs = selected_kv.get(element_key, list(df_elemento['kv'].unique())[:3])
         while len(kvs) < 3:
             kvs.append(None)
 
-        # Crear figura 3 filas x 3 columnas
         fig, axs = plt.subplots(3, 3, figsize=(15, 10))
         fig.suptitle(f"{element_key}", fontsize=16)
 
         for col_idx, kv in enumerate(kvs):
-            # Si no hay kv (faltaron datos), apagamos esas columnas
             if kv is None:
                 for r in range(3):
                     axs[r, col_idx].axis('off')
                 continue
 
-            # Extraer solo el espectro de ese kv
             df_kv = df_elemento[df_elemento["kv"] == kv].copy().reset_index(drop=True)
             if df_kv.empty:
                 for r in range(3):
@@ -210,10 +175,10 @@ with PdfPages(dir_pdf) as pdf:
                     axs[r, col_idx].set_yticks([])
                 continue
 
-            # Obtener copia sin picos y DataFrame de picos (usando la función)
-            df_sin, df_picos = remover_picos(df_kv, altura_min=2.0, distancia_min=3, rel_height=0.5)
+            df_sin, df_picos = remover_picos(df_kv, altura_min=2.0, distancia_min=3,
+                                             rel_height=0.5, ancho_max=10)
 
-            # FILA 1: original con picos marcados
+            # FILA 1: original con picos
             ax = axs[0, col_idx]
             ax.plot(df_kv['energy'], df_kv['fluence'], color='black', linewidth=0.8)
             if not df_picos.empty:
@@ -223,23 +188,23 @@ with PdfPages(dir_pdf) as pdf:
                 ax.set_ylabel("Original\nIntensidad")
             ax.set_xlabel("Energía (keV)")
 
-            # FILA 2: solo sin picos
+            # FILA 2: sin picos
             ax = axs[1, col_idx]
             ax.plot(df_sin['energy'], df_sin['fluence'], color='blue', linewidth=0.9, label='Sin picos')
             if col_idx == 0:
                 ax.set_ylabel("Sin picos\nIntensidad")
             ax.set_xlabel("Energía (keV)")
             if col_idx == 2:
-                ax.legend(loc='upper right', fontsize=8)
+                ax.legend(fontsize=8)
 
-            # Fila 3: ambas superpuestas (compa
+            # FILA 3: comparación
             ax = axs[2, col_idx]
             ax.plot(df_kv['energy'], df_kv['fluence'], color='black', alpha=0.6, label='Original')
             ax.plot(df_sin['energy'], df_sin['fluence'], color='blue', label='Sin picos')
             if not df_picos.empty:
                 ax.scatter(df_picos['energy'], df_picos['fluence'], color='red', s=12, label='Picos')
-            if col_idx == 2:  # solo poner leyenda en la última columna para no sobrecargar
-                ax.legend(loc='upper right')
+            if col_idx == 2:
+                ax.legend()
             if col_idx == 0:
                 ax.set_ylabel("Comparación\nIntensidad")
             ax.set_xlabel("Energía (keV)")
@@ -248,38 +213,41 @@ with PdfPages(dir_pdf) as pdf:
         pdf.savefig(fig, bbox_inches='tight', pad_inches=0.1)
         plt.close(fig)
 
-print(f"PDF guardado en: {dir_pdf}")
 
 
 #2.b. Aproximar el continuo
-def ajustar_continuo_spline(df_sin_picos, s=2):
+def ajustar_continuo_rbf(df_sin_picos, function='quintic', smooth=5, smooth_window=9, polyorder=1):
     x = df_sin_picos["energy"].values
     y = df_sin_picos["fluence"].values
-    spline = UnivariateSpline(x, y, s=s)
-    y_fit = spline(x)
+
+    # Suavizado previo
+    if len(y) >= smooth_window:
+        y_suave = savgol_filter(y, smooth_window, polyorder)
+    else:
+        y_suave = y
+
+    # Ajuste RBF suave
+    rbf = Rbf(x, y_suave, function=function, smooth=smooth)
+    y_fit = rbf(x)
+
     return x, y_fit
 
+
+# --- PDF de salida ---
 dir_pdf_b = os.path.join(data_dir, "2.b.pdf")
-registros_continuo = []  # Lista para ir almacenando filas del DataFrame
+registros_continuo = []  # Lista para el DataFrame final
 
 with PdfPages(dir_pdf_b) as pdf:
     for element_key, content in datos.items():
         df_elemento = content["dataframe"].copy()
-        kvs = None
-        if 'selected_kv' in globals():
-            if element_key in selected_kv:
-                kvs = selected_kv[element_key]
-            else:
-                short = element_key.split('_')[0]
-                if short in selected_kv:
-                    kvs = selected_kv[short]
-        if kvs is None:
-            kvs = list(df_elemento['kv'].unique())[:3]
+
+        # kV seleccionados SOLO para graficar
+        kvs = selected_kv.get(element_key, list(df_elemento['kv'].unique())[:3])
         while len(kvs) < 3:
             kvs.append(None)
 
         fig, axs = plt.subplots(3, 3, figsize=(15, 10))
-        fig.suptitle(f"Ajuste del continuo - {element_key.split('_')[0]}", fontsize=16)
+        fig.suptitle(f"Ajuste del continuo (RBF) - {element_key.split('_')[0]}", fontsize=16)
 
         for col_idx, kv in enumerate(kvs):
             if kv is None:
@@ -297,10 +265,13 @@ with PdfPages(dir_pdf_b) as pdf:
                 continue
 
             # Remover picos
-            df_sin, _ = remover_picos(df_kv, altura_min=2.0, distancia_min=3, rel_height=0.5, ancho_max=10)
-            x_fit, y_fit = ajustar_continuo_spline(df_sin, s=2)
+            df_sin, _ = remover_picos(df_kv, altura_min=2.0, distancia_min=3,
+                                      rel_height=0.5, ancho_max=10)
 
-            # Agregar registros para el DataFrame
+            # Ajuste con RBF y suavizado
+            x_fit, y_fit = ajustar_continuo_rbf(df_sin)
+
+            # Guardar en la base de datos
             for xi, yi, yorig in zip(x_fit, y_fit, df_sin["fluence"].values):
                 registros_continuo.append({
                     "elemento": element_key.split('_')[0],
@@ -310,17 +281,19 @@ with PdfPages(dir_pdf_b) as pdf:
                     "fluence_continuo": yi
                 })
 
-            # Graficar
+            # FILA 1: sin picos
             axs[0, col_idx].plot(df_sin["energy"], df_sin["fluence"], color="blue")
             axs[0, col_idx].set_title(f"{element_key.split('_')[0]}_{kv}\nSin picos")
             axs[0, col_idx].set_xlabel("Energía (keV)")
             axs[0, col_idx].set_ylabel("Intensidad")
 
+            # FILA 2: solo ajuste
             axs[1, col_idx].plot(x_fit, y_fit, color="orange")
-            axs[1, col_idx].set_title("Ajuste spline")
+            axs[1, col_idx].set_title("Ajuste RBF suavizado")
             axs[1, col_idx].set_xlabel("Energía (keV)")
             axs[1, col_idx].set_ylabel("Intensidad")
 
+            # FILA 3: comparación
             axs[2, col_idx].plot(df_sin["energy"], df_sin["fluence"], color="blue", label="Sin picos")
             axs[2, col_idx].plot(x_fit, y_fit, color="orange", label="Ajuste")
             axs[2, col_idx].set_title("Comparación")
@@ -332,11 +305,8 @@ with PdfPages(dir_pdf_b) as pdf:
         pdf.savefig(fig, bbox_inches="tight", pad_inches=0.1)
         plt.close(fig)
 
-# Convertir a DataFrame
+# --- Crear DataFrame con todos los datos ---
 datos_continuo = pd.DataFrame(registros_continuo)
-
-print(f"PDF guardado en {dir_pdf_b}")
-print("DataFrame datos_continuo creado con forma:", datos_continuo.shape)
 
 
 #2.c. Analizar el continuo 
@@ -352,20 +322,13 @@ def calcular_fwhm(x, y):
     def interp(idx1, idx2):
         return x[idx1] + (half_max - y[idx1]) * (x[idx2] - x[idx1]) / (y[idx2] - y[idx1])
 
-    if left_idx > 0:
-        x_left = interp(left_idx - 1, left_idx)
-    else:
-        x_left = x[left_idx]
-
-    if right_idx < len(x) - 1:
-        x_right = interp(right_idx, right_idx + 1)
-    else:
-        x_right = x[right_idx]
+    x_left = interp(left_idx - 1, left_idx) if left_idx > 0 else x[left_idx]
+    x_right = interp(right_idx, right_idx + 1) if right_idx < len(x) - 1 else x[right_idx]
 
     return x_right - x_left
 
 
-# Diccionario para guardar resultados
+# --- Cálculos usando TODOS los datos ---
 resultados = {
     "elemento": [],
     "kv": [],
@@ -375,10 +338,9 @@ resultados = {
     "fwhm": []
 }
 
-# Recorrer por cada elemento y kV en el DataFrame
 for (elemento, kv), df_kv in datos_continuo.groupby(["elemento", "kv"]):
     x = df_kv["energy"].values
-    y = df_kv["fluence_continuo"].values  # usamos el ajuste continuo
+    y = df_kv["fluence_continuo"].values  # ajuste RBF
     if len(x) == 0 or len(y) == 0:
         continue
 
@@ -394,21 +356,31 @@ for (elemento, kv), df_kv in datos_continuo.groupby(["elemento", "kv"]):
     resultados["energia_max"].append(energia_max)
     resultados["fwhm"].append(fwhm)
 
-# Convertir a DataFrame para graficar
+# Convertir a DataFrame con todos los cálculos
 df_res = pd.DataFrame(resultados)
 
-# Graficar
+# --- Crear un mapeo de claves cortas a kV seleccionados ---
+selected_kv_short = {}
+for full_key, kv_list in selected_kv.items():
+    short = full_key.split("_")[0]  # ej: "Mo_unfiltered..." → "Mo"
+    selected_kv_short[short] = kv_list
+
+# --- Graficar SOLO selected_kv ---
 dir_pdf_c = os.path.join(data_dir, "2.c.pdf")
 fig, axs = plt.subplots(2, 2, figsize=(12, 8))
 colores = {"Mo": "tab:blue", "Rh": "tab:orange", "W": "tab:green"}
 
 for elemento in df_res["elemento"].unique():
-    df_e = df_res[df_res["elemento"] == elemento]
+    # Filtrar solo los kV seleccionados para las gráficas
+    kvs_graf = selected_kv_short.get(elemento, [])
+    df_e = df_res[(df_res["elemento"] == elemento) & (df_res["kv"].isin(kvs_graf))]
+
     axs[0, 0].plot(df_e["voltaje"], df_e["maximo"], marker='o', label=elemento, color=colores[elemento])
     axs[0, 1].plot(df_e["voltaje"], df_e["energia_max"], marker='o', label=elemento, color=colores[elemento])
     axs[1, 0].plot(df_e["voltaje"], df_e["fwhm"], marker='o', label=elemento, color=colores[elemento])
     axs[1, 1].plot(df_e["energia_max"], df_e["maximo"], marker='o', label=elemento, color=colores[elemento])
 
+# Etiquetas y leyendas
 axs[0, 0].set_title("Máximo del continuo vs Voltaje")
 axs[0, 0].set_xlabel("Voltaje (kV)")
 axs[0, 0].set_ylabel("Máximo del continuo")
@@ -432,10 +404,5 @@ axs[1, 1].legend()
 plt.tight_layout()
 plt.savefig(dir_pdf_c, bbox_inches="tight", pad_inches=0.1)
 plt.close(fig)
-print(f"PDF guardado en {dir_pdf_c}")
 
-
-#Mañana optimizo el punto 2 y coninuo con el bono
-
-print(datos_continuo)
 
