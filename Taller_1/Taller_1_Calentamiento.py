@@ -126,12 +126,76 @@ for folder in folders:
 
 
 #Punto 1
+# Estilo y configuración para artículo científico
+# Estilo y configuración
+plt.style.use('ggplot')
+plt.rcParams.update({
+    "font.size": 12,
+    "axes.titlesize": 14,
+    "axes.labelsize": 12,
+    "legend.fontsize": 10,
+    "figure.figsize": (14, 8),
+    "lines.linewidth": 2
+})
+
+# Colores por elemento
+element_colors = {
+    "Mo": "#1f77b4",  # azul
+    "Rh": "#ff7f0e",  # naranja
+    "W": "#2ca02c"    # verde
+}
+
+# Crear figura con subplots
+n_rows = len(datos)
+n_cols = max(len(v) for v in selected_kv.values())
+fig, axs = plt.subplots(n_rows, n_cols, figsize=(5 * n_cols, 4 * n_rows), sharex=False, sharey=False)
+
+# Ajustar axs para casos especiales
+if n_rows == 1 and n_cols == 1:
+    axs = [[axs]]
+elif n_rows == 1:
+    axs = [axs]
+elif n_cols == 1:
+    axs = [[ax] for ax in axs]
+
+# Ruta donde guardar el PDF dentro de Taller_1
+dir_pdf = os.path.join(data_dir, "1.pdf")
+with PdfPages(dir_pdf) as pdf:
+    for row_idx, (element_key, content) in enumerate(datos.items()):
+        df = content["dataframe"]
+        element_name = element_key.split("_")[0]
+        color = element_colors.get(element_name, "#000000")
+
+        kvs = selected_kv[element_key]
+        for col_idx, kv in enumerate(kvs):
+            ax = axs[row_idx][col_idx]
+
+            kv_data = df[df["kv"] == kv]
+            if kv_data.empty:
+                ax.axis('off')
+                continue
+
+            ax.plot(kv_data["energy"], kv_data["fluence"], color=color, label=f"{kv}")
+            ax.set_title(f"{element_name} - {kv}")
+            ax.set_xlabel("Energía (keV)")
+            ax.set_ylabel("Conteo de fotones\n(photons keV$^{-1}$ cm$^{-2}$)")
+            ax.legend()
+
+            # Información técnica
+            ax.text(0.98, 0.02,
+                    f"Ánodo: {content['anode']}\nÁngulo: {content['anode_angle']}\nFiltración: {content['inherent_filtration']}",
+                    ha='right', va='bottom', transform=ax.transAxes,
+                    fontsize=9, bbox=dict(facecolor='white', alpha=0.5, edgecolor='gray'))
+
+    plt.tight_layout()
+    pdf.savefig(fig, bbox_inches="tight", pad_inches=0.1)
+    plt.close(fig)
+
 
 
 #Punto 2 - Comportamiento del continuo (Bremsstrahlung)
 
 # 2.a. Remover los picos
-
 datos_sin_picos = [] # Creamos un Dataframe de los datos sin picos para ser usados en el punto B y posteriores
 
 def remover_picos(df, altura_min=2.0, distancia_min=3, rel_height=0.8, ancho_max=10):
@@ -149,14 +213,14 @@ def remover_picos(df, altura_min=2.0, distancia_min=3, rel_height=0.8, ancho_max
     df_sin_picos = df.drop(index=df.index[indices_a_eliminar]).copy()
     return df_sin_picos, df_picos
 
-dir_pdf = os.path.join(data_dir, "2.a.pdf")
+dir_pdfA = os.path.join(data_dir, "2.a.pdf")
 
-with PdfPages(dir_pdf) as pdf:
+with PdfPages(dir_pdfA) as pdf:
     for element_key, content in datos.items():
         df_elemento = content["dataframe"].copy()
         elemento_corto = element_key.split('_')[0]
 
-        # --- Guardar TODOS los kV en datos_sin_picos ---
+
         for kv_total in df_elemento['kv'].unique():
             df_kv_total = df_elemento[df_elemento["kv"] == kv_total].copy().reset_index(drop=True)
             if not df_kv_total.empty:
