@@ -517,64 +517,53 @@ with PdfPages(dir_pdf_3a) as pdf:
 from scipy.optimize import curve_fit
 
 def gaussiana(x, amplitud, centro, sigma):
-    """Función gaussiana para ajustar picos"""
     return amplitud * np.exp(-((x - centro) ** 2) / (2 * sigma ** 2))
 
 def encontrar_y_ajustar_pico_principal(df_kv, altura_min=0.1, distancia_min=5):
-    """
-    Encuentra el pico principal y ajusta una gaussiana
-    """
     x = df_kv["energy"].values
     y = df_kv["fluence_picos"].values
-    
+
     if len(x) < 5 or np.max(y) < altura_min:
         return None
-    
-    # Encontrar picos
+
     picos, propiedades = find_peaks(y, height=altura_min, distance=distancia_min)
-    
     if len(picos) == 0:
         return None
-    
-    # Seleccionar el pico más alto
+
     alturas = propiedades["peak_heights"]
     idx_pico_principal = picos[np.argmax(alturas)]
     altura_principal = y[idx_pico_principal]
     energia_principal = x[idx_pico_principal]
-    
-    # Definir ventana alrededor del pico para el ajuste
+
     ventana = 10  # keV
     mask = (x >= energia_principal - ventana) & (x <= energia_principal + ventana)
     x_ajuste = x[mask]
     y_ajuste = y[mask]
-    
+
     if len(x_ajuste) < 3:
         return None
-    
+
     try:
-        # Estimación inicial de parámetros
         amplitud_inicial = altura_principal
         centro_inicial = energia_principal
-        sigma_inicial = 2.0  # keV
-        
-        # Ajuste gaussiano
+        sigma_inicial = 2.0
+
         popt, pcov = curve_fit(
-            gaussiana, 
-            x_ajuste, 
+            gaussiana,
+            x_ajuste,
             y_ajuste,
             p0=[amplitud_inicial, centro_inicial, sigma_inicial],
             maxfev=5000
         )
-        
+
         amplitud, centro, sigma = popt
-        
-        # Calcular FWHM gaussiano: FWHM = 2.355 * sigma
         fwhm = 2.355 * abs(sigma)
-        
-        # Verificar que el ajuste sea razonable
-        if abs(centro - energia_principal) > 5 or fwhm > 20 or amplitud <= 0:
+
+        # FILTRO: amplitud no debe ser mayor que 5x el máximo real del espectro
+        # Se desarollo este filtro dado que en el elemento de Rh se estaban presnetando Alturas de Pico de 1e6 lo que apalstaba los valores de los demas elementos
+        if abs(centro - energia_principal) > 5 or fwhm > 20 or amplitud <= 0 or amplitud > 5 * np.max(y):
             return None
-            
+
         return {
             "amplitud": amplitud,
             "centro": centro,
@@ -584,11 +573,10 @@ def encontrar_y_ajustar_pico_principal(df_kv, altura_min=0.1, distancia_min=5):
             "y_ajuste": y_ajuste,
             "y_fit": gaussiana(x_ajuste, *popt)
         }
-        
-    except Exception as e:
+
+    except Exception:
         return None
 
-# Realizar ajustes para todos los espectros
 resultados_ajustes = {
     "elemento": [],
     "kv": [],
@@ -598,59 +586,45 @@ resultados_ajustes = {
     "posicion_pico": []
 }
 
-ajustes_exitosos = {}  # Para guardar datos de los ajustes exitosos
+ajustes_exitosos = {}
 
 for elemento in df_picos_aislados["elemento"].unique():
     df_elemento = df_picos_aislados[df_picos_aislados["elemento"] == elemento]
-    
     for kv in df_elemento["kv"].unique():
         df_kv = df_elemento[df_elemento["kv"] == kv]
-        
         if df_kv.empty:
             continue
-            
         resultado = encontrar_y_ajustar_pico_principal(df_kv)
-        
         if resultado is not None:
             voltaje_num = float(kv.replace("kV", ""))
-            
-            # Filtrar voltajes muy bajos donde los picos pueden no estar bien definidos
-            if voltaje_num >= 15:  # Solo incluir kV >= 15 para tener picos bien formados
+            if voltaje_num >= 15:
                 resultados_ajustes["elemento"].append(elemento)
                 resultados_ajustes["kv"].append(kv)
                 resultados_ajustes["voltaje"].append(voltaje_num)
                 resultados_ajustes["altura_pico"].append(resultado["amplitud"])
                 resultados_ajustes["fwhm_pico"].append(resultado["fwhm"])
                 resultados_ajustes["posicion_pico"].append(resultado["centro"])
-                
-                # Guardar para posibles gráficas de ejemplo
                 ajustes_exitosos[f"{elemento}_{kv}"] = resultado
 
 df_ajustes = pd.DataFrame(resultados_ajustes)
 
 # Graficar 3.b - Resultados de los ajustes
 dir_pdf_3b = os.path.join(data_dir, "3.b.pdf")
-
 fig, axs = plt.subplots(1, 2, figsize=(12, 5))
 colores = {"Mo": "tab:blue", "Rh": "tab:orange", "W": "tab:green"}
 
-# Gráfica 1: Altura del pico vs voltaje
 for elemento in df_ajustes["elemento"].unique():
     df_e = df_ajustes[df_ajustes["elemento"] == elemento]
-    axs[0].plot(df_e["voltaje"], df_e["altura_pico"], 
-               marker='o', label=elemento, color=colores[elemento], linewidth=2)
+    axs[0].plot(df_e["voltaje"], df_e["altura_pico"],
+                marker='o', label=elemento, color=colores[elemento], linewidth=2)
+    axs[1].plot(df_e["voltaje"], df_e["fwhm_pico"],
+                marker='o', label=elemento, color=colores[elemento], linewidth=2)
 
 axs[0].set_title("Altura del pico principal vs Voltaje del tubo")
 axs[0].set_xlabel("Voltaje (kV)")
 axs[0].set_ylabel("Altura del pico")
 axs[0].legend()
 axs[0].grid(True, alpha=0.3)
-
-# Gráfica 2: FWHM vs voltaje
-for elemento in df_ajustes["elemento"].unique():
-    df_e = df_ajustes[df_ajustes["elemento"] == elemento]
-    axs[1].plot(df_e["voltaje"], df_e["fwhm_pico"], 
-               marker='o', label=elemento, color=colores[elemento], linewidth=2)
 
 axs[1].set_title("FWHM del pico principal vs Voltaje del tubo")
 axs[1].set_xlabel("Voltaje (kV)")
