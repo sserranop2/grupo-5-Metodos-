@@ -9,54 +9,6 @@ from scipy.interpolate import Rbf
 from scipy.signal import savgol_filter
 
 
-
-#Introduccion al experimento:
-#Cuando una fuente de rayos X emite radiación, no todos los rayos tienen la misma energía. En vez de eso, se emiten 
-#muchos fotones (partículas de luz) con diferentes niveles de energía.
-
-#Para organizar los datos del experimento, la idea es la siguiente:
-
-#Un diccionario general con 3 llaves ('Mo_unfiltered_10kV-50kV', 'Rh_unfiltered_10kV-50kV', 'W_unfiltered_10kV-50kV'). 
-
-#Cada llave clasifica espectros de rayos X segun el elemento que se uso como anodo para la fuente de rayos X; 
-#en este caso un tubo de rayos X.
-
-#En cada llave, tres diccionario anidados para tres datos particulares del experimento y uno que representa un dataframe;
-#este contiene 40 espectros de rayos X, cada uno corresponden a un voltaje particular.
-#El voltaje oscila entre 10(kV) y 50(kV). 
-
-#Recordemos que el espectro de rayos X es la gráfica o representación que muestra cuántos fotones hay (o la intensidad) 
-#para cada nivel de energía.
-
-#De esta manera el espectro de rayos X tendra coordenadas:
-#(energy = energía, fluence = intensidad)
-#Eje X: Nivel de energía de los fotones 
-#Eje Y: Cantidad de fotones o intensidad para esa energía específica.
-
-#De esta manera la estrucctura de datos que manejaremos será:
-#datos = {
-#    "Mo_unfiltered_10kV-50kV": {"dataframe": dataframe,
-#                                "anode": anode,
-#                                "anode_angle": anode_angle,
-#                                "inherent_filtration": inherent_filtration},
-
-#    "Rh_unfiltered_10kV-50kV": {"dataframe": dataframe,
-#                                "anode": anode,
-#                                "anode_angle": anode_angle,
-#                                "inherent_filtration": inherent_filtration},
-
-#    "W_unfiltered_10kV-50kV": {"dataframe": dataframe,
-#                                "anode": anode,
-#                                "anode_angle": anode_angle,
-#                                "inherent_filtration": inherent_filtration}
-#        }
-
-#Los dataframe van a tener una estructura asi:
-#df = pd.DataFrame({'energy ': energy,
-#                    'fluence': fluence
-#                 })
-
-
 # --- Configuración ---
 # Ruta base donde está la carpeta Taller_1
 data_dir = os.path.join(os.getcwd(), 'Taller_1')
@@ -69,7 +21,7 @@ folders = [
 ]
 
 # Intefaz de selección de kV
-# Esto facilita el uso del programa dado que se puedene stuidar varios niveles de energía (kV) para cada elemento.
+# Esto facilita el uso del programa dado que se pueden estuidar varios niveles de energía (kV) para cada elemento.
 print("Selecciona 3 niveles de energía (kV) con los que quieres trabajar para las gráficas.")
 print("Ejemplo: 10 20 30\n")
 selected_kv = {}
@@ -78,7 +30,7 @@ for folder in folders:
     kvs = input(f"Ingrese 3 niveles de kV para {element_key.split('_')[0]} separados por espacio o coma: ")
     selected_kv[element_key] = [f"{int(k.strip())}kV" for k in kvs.replace(",", " ").split()]
 
-# --- Construcción de la base de datos con TODOS los archivos ---
+# Creacion de diccionario con los datos de todos los espectros
 datos = {}
 
 for folder in folders:
@@ -127,7 +79,6 @@ for folder in folders:
 
 #Punto 1
 # Estilo y configuración para artículo científico
-# Estilo y configuración
 plt.style.use('ggplot')
 plt.rcParams.update({
     "font.size": 12,
@@ -317,7 +268,6 @@ with PdfPages(dir_pdf_b) as pdf:
     for element_key, content in datos.items():
         elemento_corto = element_key.split('_')[0]
 
-        # --- Guardar TODOS los kV en datos_continuo ---
         for kv_total in df_sin_picos[df_sin_picos["elemento"] == elemento_corto]["kv"].unique():
             df_sin_total = df_sin_picos[(df_sin_picos["elemento"] == elemento_corto) & (df_sin_picos["kv"] == kv_total)]
             if not df_sin_total.empty:
@@ -331,7 +281,7 @@ with PdfPages(dir_pdf_b) as pdf:
                         "fluence_continuo": yi
                     })
 
-        # --- Solo graficar los seleccionados ---
+        #Filtro para grafica de los kV elegidos
         kvs = selected_kv.get(
             element_key,
             list(df_sin_picos[df_sin_picos["elemento"] == elemento_corto]["kv"].unique())[:3]
@@ -390,7 +340,6 @@ with PdfPages(dir_pdf_b) as pdf:
         pdf.savefig(fig, bbox_inches="tight", pad_inches=0.1)
         plt.close(fig)
 
-# DataFrame con todos los datos de la aproximación continua (TODOS los kV)
 datos_continuo = pd.DataFrame(datos_continuo)
 
 #2.c. Analizar el continuo 
