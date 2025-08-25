@@ -275,30 +275,55 @@ plot_beyond_nyquist_panels()
 
 
 #3
-# =============== Utilidades básicas ===============
+# Utilidades comunes
 def base_dir():
     try:
         return Path(__file__).resolve().parent
     except NameError:
         return Path(os.getcwd())
 
-def to_float01(a):  return np.asarray(a).astype(np.float32) / 255.0
-def to_uint8(a01):  return (np.clip(a01,0,1) * 255.0 + 0.5).astype(np.uint8)
-def save_img(p, a01): Image.fromarray(to_uint8(a01)).save(str(p))
+def to_float01(arr):
+    return np.asarray(arr).astype(np.float32) / 255.0
 
-def fft2_shift(x):    return np.fft.fftshift(np.fft.fft2(x))
-def ifft2_unshift(X): return np.real(np.fft.ifft2(np.fft.ifftshift(X)))
+def to_uint8(arr01):
+    a = np.clip(arr01, 0.0, 1.0)
+    return (a * 255.0 + 0.5).astype(np.uint8)
 
-def pad_reflect(img, pad):     return np.pad(img, ((pad,pad),(pad,pad)), mode="reflect")
-def crop_center(img, H, W, p): return img[p:p+H, p:p+W]
+def save_img(path, arr01):
+    Image.fromarray(to_uint8(arr01)).save(str(path))
 
-# =============== 3.a: desenfoque gaussiano (FFT) ===============
+def fft2_shift(x):
+    return np.fft.fftshift(np.fft.fft2(x))
+
+def ifft2_unshift(X):
+    return np.real(np.fft.ifft2(np.fft.ifftshift(X)))
+
+def show_img(img2d01, title="", cmap="gray"):
+    H, W = img2d01.shape
+    plt.figure(figsize=(5, 4), dpi=120)
+    plt.imshow(img2d01, cmap=cmap, origin="upper", extent=[0, W, H, 0], aspect="equal")
+    plt.title(title); plt.xlabel("x [pix]"); plt.ylabel("y [pix]")
+    plt.tight_layout(); plt.show()
+
+def log_spectrum01(X_shift):
+    mag = np.log1p(np.abs(X_shift))
+    mag = (mag - mag.min()) / (mag.max() - mag.min() + 1e-9)
+    return mag
+
+
+# 3.a. Desenfoque: multiplicar FFT 2D por gaussiana (por canal y guardar 3.a.jpg)
+
 def gaussian_lowpass(shape_hw, sigma_px):
     H, W = shape_hw
-    cy, cx = H//2, W//2
+    cy, cx = H // 2, W // 2
     yy, xx = np.ogrid[:H, :W]
-    r2 = (yy - cy)**2 + (xx - cx)**2
-    return np.exp(-0.5 * r2 / float(sigma_px**2))
+    r2 = (yy - cy) ** 2 + (xx - cx) ** 2
+    return np.exp(-0.5 * r2 / float(sigma_px ** 2))
+
+def lowpass_gaussian_fft2_channel(channel01, Hmask):
+    X = fft2_shift(channel01)
+    Y = ifft2_unshift(X * Hmask)
+    return Y
 
 def run_3a(miette_path, out_path, sigma_frac=0.06):
     rgb = to_float01(np.array(Image.open(miette_path).convert("RGB")))
@@ -306,224 +331,179 @@ def run_3a(miette_path, out_path, sigma_frac=0.06):
     Hmask = gaussian_lowpass((H, W), sigma_frac * min(H, W))
     out = np.empty_like(rgb)
     for c in range(3):
-        out[..., c] = ifft2_unshift(fft2_shift(rgb[..., c]) * Hmask)
-    save_img(out_path, np.clip(out, 0, 1))
+        out[..., c] = lowpass_gaussian_fft2_channel(rgb[..., c], Hmask)
+    out = np.clip(out, 0, 1)
+    save_img(out_path, out)
 
-# =============== 3.b: peineta de muescas (fundamental + armónicos) ===============
-def _disk_mask(H, W, cy, cx, r):
-    yy, xx = np.ogrid[:H, :W]
-    return (yy - cy)**2 + (xx - cx)**2 <= r*r
 
-def _find_fundamental_peak(mag, guard_r=18, num_candidates=80):
+# 3.b.a. Pato (B/N): quitar picos periódicos manualmente con muescas rectangulares
+def build_rect_notch_mask(shape_hw, rect_list):
     """
-    Devuelve (u_y, u_x) (dirección unitaria del patrón) y r0 (radio/frecuencia fundamental en píxeles)
-    a partir de los picos más fuertes del espectro (excluyendo el centro).
+    rect_list: [ ((cy, cx), (hy, hx)), ... ] en espectro 'shifted'
+    (cy,cx) centro del rectángulo; (hy,hx) semialtos/semianchos.
+    Se aplica también en el pico simétrico conjugado.
     """
-    H, W = mag.shape
-    cy, cx = H//2, W//2
-
-    # Ignora DC y bajas frecuencias
-    work = mag.copy()
-    work[_disk_mask(H, W, cy, cx, guard_r)] = 0.0
-
-    peaks = []
-    Wk = work.copy()
-    for _ in range(num_candidates):
-        idx = np.argmax(Wk)
-        if Wk.flat[idx] <= 0:
-            break
-        y, x = np.unravel_index(idx, Wk.shape)
-        peaks.append((y, x, Wk[y, x]))
-        rr = 3
-        yy, xx = np.ogrid[:H, :W]
-        Wk[(yy - y)**2 + (xx - x)**2 <= rr*rr] = 0.0
-
-    if not peaks:
-        # Fallback raro: diagonal suave
-        return (1/np.sqrt(2), 1/np.sqrt(2)), max(guard_r+8, 20)
-
-    # Empareja con el simétrico y elige el par más fuerte
-    best = None
-    for y, x, val in peaks:
-        ys, xs = (2*cy - y) % H, (2*cx - x) % W
-        val_sym = work[ys, xs]
-        score = val + val_sym
-        r = np.hypot(y - cy, x - cx) + 1e-9
-        if best is None or score > best[0]:
-            dy, dx = (y - cy) / r, (x - cx) / r
-            best = (score, (dy, dx), r)
-
-    _, (uy, ux), r0 = best
-    return (uy, ux), float(r0)
-
-def _build_notch_comb_mask(shape, direction_uv, r0,
-                           harm_max=None, guard_r=18,
-                           notch_r0=6.0, notch_scale=0.012):
-    """
-    Máscara multiplicativa (1 entre muescas, 0 en muescas) que anula
-    los armónicos ±m*r0 a lo largo de la recta definida por 'direction_uv'.
-    Cada muesca es un disco (radio = notch_r0 + notch_scale * m * r0).
-    """
-    H, W = shape
-    cy, cx = H//2, W//2
-    yy, xx = np.ogrid[:H, :W]
-    uy, ux = direction_uv
-    rmax = int(np.hypot(cy, cx)) - 2
-    if harm_max is None:
-        harm_max = int(rmax // max(r0, 1.0))
-
+    H, W = shape_hw
     mask = np.ones((H, W), dtype=np.float32)
+    cy0, cx0 = H // 2, W // 2
 
-    def zero_disk(mask, cy0, cx0, r):
-        rr2 = (yy - cy0)**2 + (xx - cx0)**2 <= r*r
-        mask[rr2] = 0.0
+    def zero_rect(mask, cy, cx, hy, hx):
+        y1, y2 = max(0, cy - hy), min(H, cy + hy + 1)
+        x1, x2 = max(0, cx - hx), min(W, cx + hx + 1)
+        mask[y1:y2, x1:x2] = 0.0
 
-    for m in range(1, harm_max + 1):
-        r = m * r0
-        if r < guard_r or r > rmax:
+    for ((cy, cx), (hy, hx)) in rect_list:
+        # evita tocar DC
+        if abs(cy - cy0) < 2 and abs(cx - cx0) < 2:
             continue
-        y = int(round(cy + r * uy))
-        x = int(round(cx + r * ux))
-        ys = 2*cy - y
-        xs = 2*cx - x
+        zero_rect(mask, cy, cx, hy, hx)
+        # pico simétrico
+        cy_sym = (2 * cy0 - cy) % H
+        cx_sym = (2 * cx0 - cx) % W
+        zero_rect(mask, cy_sym, cx_sym, hy, hx)
 
-        rad = int(round(notch_r0 + notch_scale * r))  # radio crece con el orden
-        zero_disk(mask, y, x, rad)
-        zero_disk(mask, ys, xs, rad)
-
-    # protege bajas frecuencias (detalle/iluminación global)
-    mask[_disk_mask(H, W, cy, cx, guard_r)] = 1.0
     return mask
 
-def _denoise_periodic_any(img01,
-                          PAD_FRAC=0.22, GUARD_R=18,
-                          NOTCH_R0=6.0, NOTCH_SCALE=0.012,
-                          HARM_MAX=None):
-    """
-    1) pad reflect
-    2) FFT -> detectar pico fundamental y dirección
-    3) máscara peineta (fundamental + armónicos)
-    4) iFFT y recorte
-    """
-    H, W = img01.shape
-    pad = max(16, int(PAD_FRAC * max(H, W)))
-    Ipad = pad_reflect(img01, pad)
+def run_3ba(duck_path, rects, out_path, spectrum_preview_path=None, rect_mask_preview_path=None):
+    I = to_float01(np.array(Image.open(duck_path).convert("L")))
+    Fsh = fft2_shift(I)
+    if spectrum_preview_path is not None:
+        save_img(spectrum_preview_path, log_spectrum01(Fsh))
 
-    X = fft2_shift(Ipad)
-    mag = np.log1p(np.abs(X)).astype(np.float32)
+    Hmask = build_rect_notch_mask(I.shape, rects)
+    if rect_mask_preview_path is not None:
+        save_img(rect_mask_preview_path, Hmask)
 
-    (uy, ux), r0 = _find_fundamental_peak(mag, guard_r=GUARD_R, num_candidates=80)
-    notch = _build_notch_comb_mask(Ipad.shape, (uy, ux), r0,
-                                   harm_max=HARM_MAX, guard_r=GUARD_R,
-                                   notch_r0=NOTCH_R0, notch_scale=NOTCH_SCALE)
+    F_filt = Fsh * Hmask
+    out = np.clip(ifft2_unshift(F_filt), 0, 1)
+    save_img(out_path, out)
 
-    Xf = X * notch
-    rec = ifft2_unshift(Xf)
-    rec = crop_center(rec, H, W, pad)
-    return np.clip(rec, 0.0, 1.0)
 
-def run_3b_gray_auto(path_in, path_out,
-                     PAD_FRAC=0.22, GUARD_R=20,
-                     NOTCH_R0=7.0, NOTCH_SCALE=0.013,
-                     HARM_MAX=None):
-    I = to_float01(np.array(Image.open(path_in).convert("L")))
-    out = _denoise_periodic_any(I, PAD_FRAC, GUARD_R, NOTCH_R0, NOTCH_SCALE, HARM_MAX)
-    save_img(path_out, out)
+# 3.b.b. Gato con persianas (B/N): detectar ángulos y anular cuñas
+def detect_angle_peaks(hist, ang_centers, prominence_rel=0.25, min_sep_deg=3):
+    k = 5
+    ker = np.ones(k) / k
+    hist_s = np.convolve(hist, ker, mode='same')
 
-def run_3b_rgb_auto(path_in, path_out,
-                    PAD_FRAC=0.22, GUARD_R=20,
-                    NOTCH_R0=7.0, NOTCH_SCALE=0.013,
-                    HARM_MAX=None):
-    """Detecta dirección y r0 en luminancia y aplica la MISMA peineta a R,G,B."""
-    rgb = to_float01(np.array(Image.open(path_in).convert("RGB")))
-    H, W, _ = rgb.shape
-    pad = max(16, int(PAD_FRAC * max(H, W)))
+    med = np.median(hist_s)
+    rng = (hist_s.max() - med)
+    thr = med + prominence_rel * max(rng, 1e-9)
 
-    # detección en luminancia
-    Y = 0.2126*rgb[...,0] + 0.7152*rgb[...,1] + 0.0722*rgb[...,2]
-    Ypad = pad_reflect(Y, pad)
-    Xy = fft2_shift(Ypad)
-    mag = np.log1p(np.abs(Xy)).astype(np.float32)
+    cand = np.where(hist_s >= thr)[0]
+    if cand.size == 0:
+        return []
 
-    (uy, ux), r0 = _find_fundamental_peak(mag, guard_r=GUARD_R, num_candidates=80)
-    notch = _build_notch_comb_mask(Ypad.shape, (uy, ux), r0,
-                                   harm_max=HARM_MAX, guard_r=GUARD_R,
-                                   notch_r0=NOTCH_R0, notch_scale=NOTCH_SCALE)
-
-    out = np.empty_like(rgb)
-    for c in range(3):
-        Ic = pad_reflect(rgb[...,c], pad)
-        Xc = fft2_shift(Ic)
-        rec = crop_center(ifft2_unshift(Xc * notch), H, W, pad)
-        out[...,c] = np.clip(rec, 0.0, 1.0)
-    save_img(path_out, out)
-
-# --- versión iterativa para el gato (re-detecta y aplica otra peineta) ---
-def run_3b_rgb_auto_iter(path_in, path_out,
-                         iters=2, PAD_FRAC=0.24, GUARD_R=22,
-                         NOTCH_R0_START=8.5, NOTCH_R0_END=11.0,
-                         NOTCH_SCALE=0.013, HARM_MAX=48):
-    """
-    Quita el patrón periódico en varias iteraciones.
-    En cada iteración re-detecta dirección y r0 en la luminancia
-    y aplica una peineta con radio levemente mayor.
-    """
-    rgb = to_float01(np.array(Image.open(path_in).convert("RGB")))
-    H, W, _ = rgb.shape
-    out = rgb.copy()
-
-    for t in range(iters):
-        # detección sobre el estado actual (luminancia)
-        Y = 0.2126*out[...,0] + 0.7152*out[...,1] + 0.0722*out[...,2]
-        pad = max(16, int(PAD_FRAC * max(H, W)))
-        Ypad = pad_reflect(Y, pad)
-        Xy = fft2_shift(Ypad)
-        mag = np.log1p(np.abs(Xy)).astype(np.float32)
-
-        (uy, ux), r0 = _find_fundamental_peak(mag, guard_r=GUARD_R, num_candidates=120)
-
-        # radio de muesca: crece un poco en cada pasada
-        if iters > 1:
-            notch_r0 = NOTCH_R0_START + (NOTCH_R0_END - NOTCH_R0_START) * (t / (iters - 1))
+    groups, g = [], [cand[0]]
+    for i in cand[1:]:
+        if i == g[-1] + 1:
+            g.append(i)
         else:
-            notch_r0 = NOTCH_R0_START
+            groups.append(g); g = [i]
+    groups.append(g)
 
-        notch = _build_notch_comb_mask(Ypad.shape, (uy, ux), r0,
-                                       harm_max=HARM_MAX, guard_r=GUARD_R,
-                                       notch_r0=notch_r0, notch_scale=NOTCH_SCALE)
+    peaks_idx = [grp[np.argmax(hist_s[grp])] for grp in groups]
+    angles = [float(ang_centers[i]) for i in peaks_idx]
 
-        # aplicar peineta a los 3 canales
-        new = np.empty_like(out)
-        for c in range(3):
-            Ic = pad_reflect(out[..., c], pad)
-            Xc = fft2_shift(Ic)
-            rec = crop_center(ifft2_unshift(Xc * notch), H, W, pad)
-            new[..., c] = np.clip(rec, 0.0, 1.0)
-        out = new
+    angles.sort()
+    fused = []
+    for a in angles:
+        if not fused or abs(a - fused[-1]) >= min_sep_deg:
+            fused.append(a)
+        else:
+            # si están muy cerca, quedarse con el mayor
+            ia = np.argmin(np.abs(ang_centers - a))
+            ip = np.argmin(np.abs(ang_centers - fused[-1]))
+            if hist_s[ia] > hist_s[ip]:
+                fused[-1] = a
+    return fused
 
-    save_img(path_out, out)
+def build_wedge_mask(shape_hw, angles_deg, half_ap_deg=2.5, rmin=0, rmax=None, keep_dc=2):
+    H, W = shape_hw
+    mask = np.ones((H, W), dtype=np.float32)
+    cy, cx = H // 2, W // 2
 
-# =================== EJECUCIÓN por puntos ===================
+    Y, X = np.ogrid[:H, :W]
+    dx, dy = (X - cx), (Y - cy)
+    R = np.sqrt(dx * dx + dy * dy)
+    th = (np.rad2deg(np.arctan2(dy, dx)) + 180.0) % 180.0
+
+    def angdist(a, t):
+        d = np.abs((a - t + 90) % 180 - 90)
+        d_sym = np.abs((a - ((t + 180) % 180) + 90) % 180 - 90)
+        return np.minimum(d, d_sym)
+
+    angles = list(angles_deg) if isinstance(angles_deg, (list, tuple, np.ndarray)) else [angles_deg]
+    for t in angles:
+        band = angdist(th, t) <= half_ap_deg
+        if rmin is not None: band &= (R >= rmin)
+        if rmax is not None: band &= (R <= rmax)
+        mask[band] = 0.0
+
+    if keep_dc and keep_dc > 0:
+        mask[R <= keep_dc] = 1.0
+
+    return mask
+
+def run_3bb(blinds_cat_path, out_path, spectrum_preview_path=None,
+            half_ap_deg=2.5, rmin=0, rmax=None, keep_dc=2,
+            prominence_rel=0.05, min_sep_deg=3):
+    I = to_float01(np.array(Image.open(blinds_cat_path).convert("L")))
+    Fsh = fft2_shift(I)
+    if spectrum_preview_path is not None:
+        save_img(spectrum_preview_path, log_spectrum01(Fsh))
+
+    # histograma angular (excluye un radio central para no contar DC)
+    Mag = np.abs(Fsh)
+    H, W = Mag.shape
+    cy, cx = H // 2, W // 2
+    Y, X = np.ogrid[:H, :W]
+    R = np.sqrt((X - cx) ** 2 + (Y - cy) ** 2)
+    TH = (np.rad2deg(np.arctan2(Y - cy, X - cx)) + 180.0) % 180.0
+    valid = R > 20
+    bins = 360
+    hist, edges = np.histogram(TH[valid], bins=bins, range=(0, 180), weights=Mag[valid])
+    ang_centers = 0.5 * (edges[1:] + edges[:-1])
+
+    angles = detect_angle_peaks(hist, ang_centers, prominence_rel=prominence_rel, min_sep_deg=min_sep_deg)
+    Wmask = build_wedge_mask((H, W), angles, half_ap_deg=half_ap_deg,
+                             rmin=rmin, rmax=rmax, keep_dc=keep_dc)
+
+    F_filt = Fsh * Wmask
+    # conservar DC
+    F_filt[cy, cx] = Fsh[cy, cx]
+    out = np.clip(ifft2_unshift(F_filt), 0, 1)
+    Image.fromarray(to_uint8(out)).save(str(out_path))
+
+
+# EJECUCIÓN por puntos
 ROOT = base_dir()
 
-# nombres según tu carpeta
+# nombres según tu Explorer (miette.jpg, p_a_t_o.jpg, g_a_t_o.png)
 MIETTE_PATH = ROOT / "miette.jpg"
-DUCK_PATH   = ROOT / "p_a_t_o.jpg"   # B/N con bandas verticales
-BLINDS_PATH = ROOT / "g_a_t_o.png"   # bandas diagonales
+DUCK_PATH   = ROOT / "p_a_t_o.jpg"
+BLINDS_PATH = ROOT / "g_a_t_o.png"
 
-# 3.a
+# === 3.a. ===
 run_3a(MIETTE_PATH, ROOT / "3.a.jpg", sigma_frac=0.06)
 
-# 3.b.a (pato, gris). Si queda residuo, sube NOTCH_R0 a 8–10 o fija HARM_MAX=30
-run_3b_gray_auto(DUCK_PATH, ROOT / "3.b.a.jpg",
-                 PAD_FRAC=0.24, GUARD_R=22,
-                 NOTCH_R0=8.0, NOTCH_SCALE=0.013, HARM_MAX=None)
+# === 3.b.a. ===
+# Primero genera previsualizaciones para ubicar picos:
+# (se guardan en la carpeta del script)
+run_3ba(DUCK_PATH, rects=[],
+        out_path=ROOT / "3.b.a.jpg",
+        spectrum_preview_path=ROOT / "3.b.a_spectrum.png",
+        rect_mask_preview_path=ROOT / "3.b.a_mask_preview.png")
 
-# 3.b.b (gato) — dos pasadas, muescas algo más anchas y más armónicos
-run_3b_rgb_auto_iter(BLINDS_PATH, ROOT / "3.b.b.png",
-                     iters=2, PAD_FRAC=0.24, GUARD_R=22,
-                     NOTCH_R0_START=8.5, NOTCH_R0_END=11.0,
-                     NOTCH_SCALE=0.013, HARM_MAX=48)
+# Después de ver 3.b.a_spectrum.png, llena tus rectángulos aquí y vuelve a correr run_3ba:
+# Ejemplo de formato (reemplaza por tus coordenadas):
+# rects_duck = [ ((255,125), (3,120)), ((400,255), (130,3)) ]
+# run_3ba(DUCK_PATH, rects_duck, ROOT / "3.b.a.jpg")
+
+# === 3.b.b. ===
+run_3bb(BLINDS_PATH, ROOT / "3.b.b.png",
+        spectrum_preview_path=ROOT / "3.b.b_spectrum.png",
+        half_ap_deg=2.5, rmin=0, rmax=None, keep_dc=2,
+        prominence_rel=0.05, min_sep_deg=3)
 
 
 #4
