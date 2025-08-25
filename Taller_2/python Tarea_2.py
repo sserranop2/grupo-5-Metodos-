@@ -506,7 +506,43 @@ run_3bb(BLINDS_PATH, ROOT / "3.b.b.png",
         prominence_rel=0.05, min_sep_deg=3)
 
 
-#4
+#4Aplicación real: datos con muestreo aleatorio
+fn = "OGLE-LMC-CEP-0001.dat"
+t, y, s = np.loadtxt(fn, unpack=True)
+
+t = t - np.min(t)                 # trasladar tiempos
+y0 = y - np.mean(y)               # quitar media (DC)
+
+# Periodograma DFT para tiempos irregulares
+T  = np.ptp(t)                    # <-- reemplaza t.ptp() por np.ptp(t)
+df = 1.0 / (5.0 * T)              # resolución ~ 1/(5*T)
+f  = np.arange(0.01, 2.0 + df/2, df)
+E  = np.exp(-2j*np.pi * t[:,None] * f[None,:])
+S  = (y0[:,None] * E).sum(0)
+P  = (np.abs(S)**2) / max(len(y0),1)
+
+# Refinar pico por parábola
+k = int(np.argmax(P)); f_best = f[k]
+if 0 < k < len(f)-1:
+    df0 = f[1]-f[0]
+    denom = (P[k-1] - 2*P[k] + P[k+1])
+    dp = 0.5*(P[k-1] - P[k+1]) / (denom if denom!=0 else 1e-12)
+    f_best = f[k] + dp*df0
+    
+period = 1.0 / f_best
+
+# Fasear y graficar
+phi = np.mod(f_best * t, 1.0)
+idx = np.argsort(phi)
+plt.figure(figsize=(6,4))
+plt.scatter(phi[idx], y[idx], s=10, alpha=0.85)
+plt.gca().invert_yaxis()
+plt.xlabel("Fase ϕ = mod(f · t, 1)")
+plt.ylabel("Brillo (magnitud)")
+plt.title(f"f = {f_best:.6f} c/d  |  P = {period:.6f} d")
+plt.tight_layout()
+plt.savefig("4.pdf", dpi=200)
+plt.close()
 
 
 
