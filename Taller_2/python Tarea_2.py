@@ -6,7 +6,6 @@ import numpy as np
 from typing import Iterable
 from PIL import Image
 import matplotlib.pyplot as plt
-from pathlib import Path
 from scipy import ndimage as ndi
 import os
 
@@ -274,126 +273,233 @@ def plot_beyond_nyquist_panels(
 plot_beyond_nyquist_panels()
 
 
-#3
-# Utilidades comunes
-def base_dir():
-    try:
-        return Path(__file__).resolve().parent
-    except NameError:
-        return Path(os.getcwd())
+#3Filtrando imágenes (FFT 2D)
+# Cargar en [0,1] y en float
+img = Image.open("miette.jpg").convert("RGB")
+I = np.asarray(img).astype(np.float32) / 255.0   # (H, W, 3)
+H, W = I.shape[:2]
+print(I.shape, I.dtype)
 
-def to_float01(arr):
-    return np.asarray(arr).astype(np.float32) / 255.0
-
-def to_uint8(arr01):
-    a = np.clip(arr01, 0.0, 1.0)
-    return (a * 255.0 + 0.5).astype(np.uint8)
-
-def save_img(path, arr01):
-    Image.fromarray(to_uint8(arr01)).save(str(path))
-
-def fft2_shift(x):
-    return np.fft.fftshift(np.fft.fft2(x))
-
-def ifft2_unshift(X):
-    return np.real(np.fft.ifft2(np.fft.ifftshift(X)))
-
-def show_img(img2d01, title="", cmap="gray"):
-    H, W = img2d01.shape
-    plt.figure(figsize=(5, 4), dpi=120)
-    plt.imshow(img2d01, cmap=cmap, origin="upper", extent=[0, W, H, 0], aspect="equal")
-    plt.title(title); plt.xlabel("x [pix]"); plt.ylabel("y [pix]")
-    plt.tight_layout(); plt.show()
-
-def log_spectrum01(X_shift):
-    mag = np.log1p(np.abs(X_shift))
-    mag = (mag - mag.min()) / (mag.max() - mag.min() + 1e-9)
-    return mag
-
-
-# 3.a. Desenfoque: multiplicar FFT 2D por gaussiana (por canal y guardar 3.a.jpg)
-
-def gaussian_lowpass(shape_hw, sigma_px):
+def gaussian_lowpass_mask(shape_hw, sigma_px):
     H, W = shape_hw
-    cy, cx = H // 2, W // 2
-    yy, xx = np.ogrid[:H, :W]
-    r2 = (yy - cy) ** 2 + (xx - cx) ** 2
-    return np.exp(-0.5 * r2 / float(sigma_px ** 2))
 
-def lowpass_gaussian_fft2_channel(channel01, Hmask):
-    X = fft2_shift(channel01)
-    Y = ifft2_unshift(X * Hmask)
-    return Y
+    u = np.arange(-W//2, W//2)
+    v = np.arange(-H//2, H//2)
+    V, U = np.meshgrid(v, u, indexing="ij")
+    D2 = U**2 + V**2
+    Hmask = np.exp(-D2 / (2.0 * (sigma_px**2)))
+    return Hmask
 
-def run_3a(miette_path, out_path, sigma_frac=0.06):
-    rgb = to_float01(np.array(Image.open(miette_path).convert("RGB")))
-    H, W = rgb.shape[:2]
-    Hmask = gaussian_lowpass((H, W), sigma_frac * min(H, W))
-    out = np.empty_like(rgb)
-    for c in range(3):
-        out[..., c] = lowpass_gaussian_fft2_channel(rgb[..., c], Hmask)
-    out = np.clip(out, 0, 1)
-    save_img(out_path, out)
+def lowpass_gaussian_fft2(channel_01, Hmask):
+    F = np.fft.fft2(channel_01)
+    F_shift = np.fft.fftshift(F)
+    F_filt = F_shift * Hmask
+    out = np.fft.ifft2(np.fft.ifftshift(F_filt)).real
+    return out
+
+# Elige el nivel de blur con una fracción del tamaño de la imagen
+sigma_frac = 0.03
+sigma_px = sigma_frac * min(H, W)
+
+Hmask = gaussian_lowpass_mask((H, W), sigma_px)
+
+out = np.empty_like(I)
+for c in range(3):
+    out[..., c] = lowpass_gaussian_fft2(I[..., c], Hmask)
+
+# Normalizar y guardar
+out = np.clip(out, 0.0, 1.0)
+out_uint8 = (out * 255.0).round().astype(np.uint8)
+Image.fromarray(out_uint8).save("3.a.jpg")
+print("Guardado en 3.a.jpg")
 
 
-# 3.b.a. Pato (B/N): quitar picos periódicos manualmente con muescas rectangulares
+
+
+# 3.b.a)
+img = Image.open("p_a_t_o.jpg").convert("L")
+I = np.asarray(img).astype(np.float32) / 255.0
+H, W = I.shape
+print("Tamaño:", I.shape)
+
+
+# Bloque 2 — FFT 2D centrada y espectro (log |F|) con ejes
+
+F   = np.fft.fft2(I)
+Fsh = np.fft.fftshift(F)
+
+mag = np.log1p(np.abs(Fsh))
+
+
+
+# Bloque 3R — (reemplaza tu Bloque 3)
+
+rects = [
+     ((255, 125), (3,120 )),
+     ((400, 255), (130, 3)),
+]
+
 def build_rect_notch_mask(shape_hw, rect_list):
     """
-    rect_list: [ ((cy, cx), (hy, hx)), ... ] en espectro 'shifted'
-    (cy,cx) centro del rectángulo; (hy,hx) semialtos/semianchos.
-    Se aplica también en el pico simétrico conjugado.
+    Muescas rectangulares duras (cuadritos) en el espectro centrado (fftshift).
+    - shape_hw: (H, W)
+    - rect_list: [ ((cy, cx), (hy, hx)), ... ]
     """
     H, W = shape_hw
     mask = np.ones((H, W), dtype=np.float32)
+
+    # Centro del espectro (por fftshift)
     cy0, cx0 = H // 2, W // 2
 
     def zero_rect(mask, cy, cx, hy, hx):
-        y1, y2 = max(0, cy - hy), min(H, cy + hy + 1)
-        x1, x2 = max(0, cx - hx), min(W, cx + hx + 1)
+        y1 = max(0, cy - hy)
+        y2 = min(H, cy + hy + 1)
+        x1 = max(0, cx - hx)
+        x2 = min(W, cx + hx + 1)
         mask[y1:y2, x1:x2] = 0.0
 
     for ((cy, cx), (hy, hx)) in rect_list:
-        # evita tocar DC
+        # Evitar tocar el centro
         if abs(cy - cy0) < 2 and abs(cx - cx0) < 2:
             continue
+
         zero_rect(mask, cy, cx, hy, hx)
-        # pico simétrico
+
         cy_sym = (2 * cy0 - cy) % H
         cx_sym = (2 * cx0 - cx) % W
         zero_rect(mask, cy_sym, cx_sym, hy, hx)
 
     return mask
 
-def run_3ba(duck_path, rects, out_path, spectrum_preview_path=None, rect_mask_preview_path=None):
-    I = to_float01(np.array(Image.open(duck_path).convert("L")))
-    Fsh = fft2_shift(I)
-    if spectrum_preview_path is not None:
-        save_img(spectrum_preview_path, log_spectrum01(Fsh))
-
-    Hmask = build_rect_notch_mask(I.shape, rects)
-    if rect_mask_preview_path is not None:
-        save_img(rect_mask_preview_path, Hmask)
-
-    F_filt = Fsh * Hmask
-    out = np.clip(ifft2_unshift(F_filt), 0, 1)
-    save_img(out_path, out)
+Hmask_preview = build_rect_notch_mask((H, W), rects)
 
 
-# 3.b.b. Gato con persianas (B/N): detectar ángulos y anular cuñas
+def build_wedge_notch_mask(shape_hw, angles_deg, width_deg=3.0, r_min=12, r_max=None):
+    """
+    Anula una o más direcciones (ángulos) con una cuña angosta alrededor de cada ángulo.
+    Trabaja sobre el espectro centrado (fftshift).
+
+    angles_deg : lista de ángulos en grados (como los ves en tu figura).
+    width_deg  : ancho angular total de la cuña (p. ej. 3–6°).
+    r_min      : radio mínimo para NO tocar el DC (centro).
+    r_max      : radio máximo (si None, usa el máximo posible).
+    """
+    import numpy as np
+
+    H, W = shape_hw
+    if r_max is None:
+        r_max = np.hypot(H//2, W//2)
+
+    # Coordenadas centradas
+    yy = np.arange(H) - H//2
+    xx = np.arange(W) - W//2
+    X, Y = np.meshgrid(xx, yy)
+    R = np.hypot(X, Y)
+    A = np.degrees(np.arctan2(Y, X))
+
+    def angdiff(a, b):
+        d = (a - b + 180.0) % 360.0 - 180.0
+        return np.abs(d)
+
+    mask = np.ones((H, W), dtype=np.float32)
+    half_w = width_deg / 2.0
+
+    for ang in angles_deg:
+        d1 = angdiff(A, ang)
+        d2 = angdiff(A, ang + 180.0)
+        sector = ((d1 <= half_w) | (d2 <= half_w)) & (R >= r_min) & (R <= r_max)
+        mask[sector] = 0.0
+
+    return mask
+
+angles_deg = [-20.0]
+width_deg  = 4.0
+r_min      = 10
+r_max      = None
+
+Hwedge = build_wedge_notch_mask((H, W), angles_deg, width_deg, r_min, r_max)
+
+
+Hrect = build_rect_notch_mask((H, W), rects)
+
+Hwedge = build_wedge_notch_mask((H, W), angles_deg, width_deg, r_min, r_max)
+
+Hmask = Hrect * Hwedge
+
+F_filt = Fsh * Hmask
+If = np.fft.ifft2(np.fft.ifftshift(F_filt)).real
+If = np.clip(If, 0.0, 1.0)
+
+out_uint8 = (If * 255.0).round().astype(np.uint8)
+Image.fromarray(out_uint8).save("3.b.a.jpg")
+
+
+
+# 3.b.b)
+# Bloque 1 — Importar librerías, cargar imagen y mostrarla con ejes
+img = Image.open("g_a_t_o.png").convert("L")
+I   = np.asarray(img).astype(np.float32) / 255.0
+
+H, W = I.shape
+print("Tamaño:", I.shape)
+
+
+# Bloque 2 — FFT 2D centrada y espectro (log |F|) con ejes
+
+F   = np.fft.fft2(I)
+Fsh = np.fft.fftshift(F)
+
+mag = np.log1p(np.abs(Fsh))
+
+
+# Bloque a — calcular histograma angular y visualizar
+Mag = np.abs(Fsh)
+H, W = Mag.shape
+cy, cx = H//2, W//2
+
+Y, X = np.ogrid[:H, :W]
+dx, dy = (X - cx), (Y - cy)
+R  = np.sqrt(dx*dx + dy*dy)
+th = (np.rad2deg(np.arctan2(dy, dx)) + 180.0) % 180.0
+
+r0 = 20
+valid = R > r0
+
+bins = 360
+hist, edges = np.histogram(th[valid], bins=bins, range=(0,180), weights=Mag[valid])
+ang_centers = 0.5*(edges[1:] + edges[:-1])
+
+plt.figure(figsize=(8,3), dpi=120)
+plt.plot(ang_centers, hist)
+plt.xlabel("Ángulo [°]"); plt.ylabel("Energía (ponderada)")
+plt.title("Histograma angular del espectro (excluyendo DC)")
+plt.tight_layout(); 
+
+# Bloque b — Detectar automáticamente TODOS los picos angulares significativos
+
 def detect_angle_peaks(hist, ang_centers, prominence_rel=0.25, min_sep_deg=3):
+    """
+    prominence_rel: fracción de (max - mediana) para considerar un pico (0.15–0.35 típico)
+    min_sep_deg: separación mínima entre picos (para no contar casi el mismo dos veces)
+    """
+    # Suavizado ligero para evitar falsos picos muy estrechos
     k = 5
-    ker = np.ones(k) / k
+    ker = np.ones(k)/k
     hist_s = np.convolve(hist, ker, mode='same')
 
     med = np.median(hist_s)
     rng = (hist_s.max() - med)
     thr = med + prominence_rel * max(rng, 1e-9)
 
+    # Candidatos: por encima del umbral
     cand = np.where(hist_s >= thr)[0]
+
     if cand.size == 0:
         return []
 
-    groups, g = [], [cand[0]]
+    # Agrupar candidatos contiguos; tomar el máximo de cada grupo
+    groups = []
+    g = [cand[0]]
     for i in cand[1:]:
         if i == g[-1] + 1:
             g.append(i)
@@ -401,40 +507,59 @@ def detect_angle_peaks(hist, ang_centers, prominence_rel=0.25, min_sep_deg=3):
             groups.append(g); g = [i]
     groups.append(g)
 
-    peaks_idx = [grp[np.argmax(hist_s[grp])] for grp in groups]
-    angles = [float(ang_centers[i]) for i in peaks_idx]
+    peaks_idx = [g[np.argmax(hist_s[g])] for g in groups]
 
-    angles.sort()
+    # En grados:
+    angles = [ang_centers[i] for i in peaks_idx]
+
+    # Fusionar picos demasiado cercanos (< min_sep_deg)
+    angles_sorted = sorted(angles)
     fused = []
-    for a in angles:
+    for a in angles_sorted:
         if not fused or abs(a - fused[-1]) >= min_sep_deg:
             fused.append(a)
         else:
-            # si están muy cerca, quedarse con el mayor
+            # si muy cerca, quedarse con el que tenga hist más alto
+            prev = fused[-1]
             ia = np.argmin(np.abs(ang_centers - a))
-            ip = np.argmin(np.abs(ang_centers - fused[-1]))
+            ip = np.argmin(np.abs(ang_centers - prev))
             if hist_s[ia] > hist_s[ip]:
                 fused[-1] = a
+
     return fused
 
-def build_wedge_mask(shape_hw, angles_deg, half_ap_deg=2.5, rmin=0, rmax=None, keep_dc=2):
+angles_detected = detect_angle_peaks(hist, ang_centers,
+                                     prominence_rel=0.05,  # sube/baja sensibilidad
+                                     min_sep_deg=3)
+
+print(f"Ángulos detectados ({len(angles_detected)}):",
+      [f"{a:.1f}°" for a in angles_detected])
+
+# Bloque c — Construir máscara con TODAS las cuñas y aplicar
+
+def build_wedge_mask(shape_hw, angles_deg, half_ap_deg=2.0, rmin=0, rmax=None, keep_dc=2):
+    if not isinstance(angles_deg, (list, tuple, np.ndarray)):
+        angles = [angles_deg]
+    else:
+        angles = list(angles_deg)
+
     H, W = shape_hw
     mask = np.ones((H, W), dtype=np.float32)
-    cy, cx = H // 2, W // 2
+    cy, cx = H//2, W//2
 
     Y, X = np.ogrid[:H, :W]
     dx, dy = (X - cx), (Y - cy)
-    R = np.sqrt(dx * dx + dy * dy)
+    R  = np.sqrt(dx*dx + dy*dy)
     th = (np.rad2deg(np.arctan2(dy, dx)) + 180.0) % 180.0
 
     def angdist(a, t):
-        d = np.abs((a - t + 90) % 180 - 90)
-        d_sym = np.abs((a - ((t + 180) % 180) + 90) % 180 - 90)
+        d     = np.abs((a - t + 90) % 180 - 90)
+        d_sym = np.abs((a - ((t+180)%180) + 90) % 180 - 90)
         return np.minimum(d, d_sym)
 
-    angles = list(angles_deg) if isinstance(angles_deg, (list, tuple, np.ndarray)) else [angles_deg]
     for t in angles:
-        band = angdist(th, t) <= half_ap_deg
+        dth = angdist(th, t)
+        band = dth <= half_ap_deg
         if rmin is not None: band &= (R >= rmin)
         if rmax is not None: band &= (R <= rmax)
         mask[band] = 0.0
@@ -444,69 +569,34 @@ def build_wedge_mask(shape_hw, angles_deg, half_ap_deg=2.5, rmin=0, rmax=None, k
 
     return mask
 
-def run_3bb(blinds_cat_path, out_path, spectrum_preview_path=None,
-            half_ap_deg=2.5, rmin=0, rmax=None, keep_dc=2,
-            prominence_rel=0.05, min_sep_deg=3):
-    I = to_float01(np.array(Image.open(blinds_cat_path).convert("L")))
-    Fsh = fft2_shift(I)
-    if spectrum_preview_path is not None:
-        save_img(spectrum_preview_path, log_spectrum01(Fsh))
+# --- Parámetros de la cuña ---
+half_ap = 2.5   # semiapertura en grados
+rmin    = 0     # que llegue hasta el centro
+rmax    = None
+keep_dc = 2     # proteger del DC
 
-    # histograma angular (excluye un radio central para no contar DC)
-    Mag = np.abs(Fsh)
-    H, W = Mag.shape
-    cy, cx = H // 2, W // 2
-    Y, X = np.ogrid[:H, :W]
-    R = np.sqrt((X - cx) ** 2 + (Y - cy) ** 2)
-    TH = (np.rad2deg(np.arctan2(Y - cy, X - cx)) + 180.0) % 180.0
-    valid = R > 20
-    bins = 360
-    hist, edges = np.histogram(TH[valid], bins=bins, range=(0, 180), weights=Mag[valid])
-    ang_centers = 0.5 * (edges[1:] + edges[:-1])
-
-    angles = detect_angle_peaks(hist, ang_centers, prominence_rel=prominence_rel, min_sep_deg=min_sep_deg)
-    Wmask = build_wedge_mask((H, W), angles, half_ap_deg=half_ap_deg,
-                             rmin=rmin, rmax=rmax, keep_dc=keep_dc)
-
-    F_filt = Fsh * Wmask
-    # conservar DC
-    F_filt[cy, cx] = Fsh[cy, cx]
-    out = np.clip(ifft2_unshift(F_filt), 0, 1)
-    Image.fromarray(to_uint8(out)).save(str(out_path))
+Wmask_all = build_wedge_mask((H, W), angles_detected,
+                             half_ap_deg=half_ap, rmin=rmin, rmax=rmax, keep_dc=keep_dc)
 
 
-# EJECUCIÓN por puntos
-ROOT = base_dir()
 
-# nombres según tu Explorer (miette.jpg, p_a_t_o.jpg, g_a_t_o.png)
-MIETTE_PATH = ROOT / "miette.jpg"
-DUCK_PATH   = ROOT / "p_a_t_o.jpg"
-BLINDS_PATH = ROOT / "g_a_t_o.png"
+# Filtrar, reinyectar DC y volver a imagen
+F_filt = Fsh * Wmask_all
+cy, cx = H//2, W//2
+F_filt[cy, cx] = Fsh[cy, cx]  # conservar brillo global
 
-# === 3.a. ===
-run_3a(MIETTE_PATH, ROOT / "3.a.jpg", sigma_frac=0.06)
+If = np.fft.ifft2(np.fft.ifftshift(F_filt)).real
+If = np.clip(If, 0.0, 1.0)
 
-# === 3.b.a. ===
-# Primero genera previsualizaciones para ubicar picos:
-# (se guardan en la carpeta del script)
-run_3ba(DUCK_PATH, rects=[],
-        out_path=ROOT / "3.b.a.jpg",
-        spectrum_preview_path=ROOT / "3.b.a_spectrum.png",
-        rect_mask_preview_path=ROOT / "3.b.a_mask_preview.png")
-
-# Después de ver 3.b.a_spectrum.png, llena tus rectángulos aquí y vuelve a correr run_3ba:
-# Ejemplo de formato (reemplaza por tus coordenadas):
-# rects_duck = [ ((255,125), (3,120)), ((400,255), (130,3)) ]
-# run_3ba(DUCK_PATH, rects_duck, ROOT / "3.b.a.jpg")
-
-# === 3.b.b. ===
-run_3bb(BLINDS_PATH, ROOT / "3.b.b.png",
-        spectrum_preview_path=ROOT / "3.b.b_spectrum.png",
-        half_ap_deg=2.5, rmin=0, rmax=None, keep_dc=2,
-        prominence_rel=0.05, min_sep_deg=3)
+from PIL import Image
+out_uint8 = (If*255.0).round().astype(np.uint8)
+Image.fromarray(out_uint8).save("3.b.b.png")
+print("Guardado 3.b.b.png")
 
 
-#4Aplicación real: datos con muestreo aleatorio
+
+
+#4A - plicación real: datos con muestreo aleatorio
 fn = "OGLE-LMC-CEP-0001.dat"
 t, y, s = np.loadtxt(fn, unpack=True)
 
@@ -528,7 +618,7 @@ if 0 < k < len(f)-1:
     denom = (P[k-1] - 2*P[k] + P[k+1])
     dp = 0.5*(P[k-1] - P[k+1]) / (denom if denom!=0 else 1e-12)
     f_best = f[k] + dp*df0
-    
+
 period = 1.0 / f_best
 
 # Fasear y graficar
