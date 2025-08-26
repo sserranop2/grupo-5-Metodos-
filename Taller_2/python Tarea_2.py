@@ -7,7 +7,14 @@ from typing import Iterable
 from PIL import Image
 import matplotlib.pyplot as plt
 from scipy import ndimage as ndi
-import os
+import pandas as pd
+import matplotlib.pyplot as plt
+import numpy as np
+from scipy.signal import find_peaks
+from scipy.ndimage import gaussian_filter1d
+from scipy.signal import find_peaks
+from matplotlib.backends.backend_pdf import PdfPages
+
 
 #1. Intuición e interpretación (Transformada general)
 
@@ -214,7 +221,7 @@ def generate_data(tmax, dt, A, freq, noise, sampling_noise=0.0, rng=None):
     y = rng.normal(y, noise, size=t.shape)
     return t, y
 
-def plot_beyond_nyquist_panels(
+def beyond_nyquist(
     sampling_noises=(0.002, 0.01, 0.10, 0.20, 0.30),   # 0.2%, 1%, 10%, 20%, 30% de dt
     tmax=2.2, dt=0.05, A=1.0, noise=0.08,              # Fs=20 Hz, Nyquist=10 Hz
     freq_true_factor=0.3,                               # f_real=3 Hz -> picos en 3, 17 (=20-3), 23 (=20+3)
@@ -270,7 +277,224 @@ def plot_beyond_nyquist_panels(
     plt.close(fig)
 
 # Genera y guarda 1.d.pdf
-plot_beyond_nyquist_panels()
+beyond_nyquist()
+
+
+#2
+#Punto 2.a
+# Cargar el DataFrame original
+df_spot_original = pd.read_csv("SN_d_tot_V2.0.csv", delimiter=",")
+
+# Copiar el DataFrame para no modificar el original
+df_spot = df_spot_original.copy()
+
+# Reemplazar -1 por NaN en la columna 'spots'
+df_spot['spots'] = df_spot['spots'].replace(-1, np.nan)
+
+# Guardar índice de NaNs antes de interpolar
+na_indices = df_spot['spots'].isna()
+
+# Interpolación lineal con límite de 4 NaNs consecutivos
+df_spot['spots_interpolada'] = df_spot['spots'].interpolate(method='linear', limit=4)
+
+# Identificar puntos interpolados: tenían NaN y ahora no
+interpolados = na_indices & df_spot['spots_interpolada'].notna()
+
+# Rellenar NaNs restantes con backward fill  (corrección: usar .bfill())
+df_spot['spots_ajustada'] = df_spot['spots_interpolada'].bfill()
+
+# Identificar puntos rellenados con bfill: eran NaN, no interpolados, y ahora llenos
+rellenados = na_indices & ~interpolados & df_spot['spots_ajustada'].notna()
+
+# Identificar puntos originales no modificados (no NaN en original)
+originales = ~na_indices
+
+# Graficar solo puntos (sin líneas)
+plt.figure(figsize=(10, 6))
+
+plt.scatter(df_spot.loc[originales, 'decimal_date'],
+            df_spot.loc[originales, 'spots_ajustada'],
+            color='blue', alpha=0.7, label='Originales (azul)', s=15)
+
+plt.scatter(df_spot.loc[interpolados, 'decimal_date'],
+            df_spot.loc[interpolados, 'spots_ajustada'],
+            color='orange', alpha=0.9, label='Interpolados (naranja)', s=25)
+
+plt.scatter(df_spot.loc[rellenados, 'decimal_date'],
+            df_spot.loc[rellenados, 'spots_ajustada'],
+            color='purple', alpha=0.9, label='Rellenados (morado)', s=25)
+
+plt.xlabel('Fecha decimal (decimal_date)')
+plt.ylabel('Manchas solares (spots)')
+plt.title('Manchas solares: puntos originales, interpolados y rellenados')
+plt.legend()
+plt.grid(True)
+plt.tight_layout()
+
+plt.savefig('2.a_Arreglar.pdf')
+plt.close()
+
+# ---------------------------------------------------------------------------------------------------------
+# Punto 2.b
+# ---------------------------------------------------------------------------------------------------------
+# 2.b_graficas.pdf Filtro (comportamiento general de los datos, sin tanto ruido.)
+# Tamizado de datos eje X(Dias) y Y(Manchas solares)
+# ---------------------------------------------------------------------------------------------------------
+
+# Cargar DataFrame original
+df_spot_original = pd.read_csv("SN_d_tot_V2.0.csv", delimiter=",")
+
+# Copiar DataFrame para no modificar el original
+df_spot_2 = df_spot_original.copy()
+
+# Reemplazar -1 por NaN en 'spots'
+df_spot_2['spots'] = df_spot_2['spots'].replace(-1, np.nan)
+
+# Interpolar lineal con límite de 4 NaNs consecutivos
+df_spot_2['spots'] = df_spot_2['spots'].interpolate(method='linear', limit=4)
+
+# Rellenar NaNs restantes con backward fill (corrección: usar .bfill())
+df_spot_2['spots'] = df_spot_2['spots'].bfill()
+
+# ---------------------------------------------------------------------------------------------------------
+# Filtro pasabajas (suavizado gaussiano)
+# ---------------------------------------------------------------------------------------------------------
+spots_suave = gaussian_filter1d(df_spot_2['spots'].to_numpy(), sigma=120)
+
+# ---------------------------------------------------------------------------------------------------------
+# Crear un único PDF con las 3 gráficas
+# ---------------------------------------------------------------------------------------------------------
+with PdfPages("2.b.data.pdf") as pdf:
+
+    # -------------------------------------------------------------------------------------
+    # Gráfica original
+    # -------------------------------------------------------------------------------------
+    plt.figure(figsize=(10, 6))
+    plt.scatter(df_spot_2.index + 1, df_spot_2['spots'], label='Original', color='green', s=10)
+    plt.xlabel('Días (day)')
+    plt.ylabel('Manchas solares (spots)')
+    plt.title('Manchas solares vs Días sin filtro')
+    plt.legend()
+    plt.grid(True)
+    plt.tight_layout()
+    pdf.savefig()
+    plt.close()
+
+    # -------------------------------------------------------------------------------------
+    # Gráfica con filtro pasabajas (gaussiano)
+    # -------------------------------------------------------------------------------------
+    plt.figure(figsize=(10, 6))
+    plt.scatter(df_spot_2.index + 1, spots_suave, label='Filtrado Gaussiano', color='red', s=10)
+    plt.xlabel('Días (day)')
+    plt.ylabel('Manchas solares (spots)')
+    plt.title('Manchas solares vs Días con filtro gaussiano')
+    plt.legend()
+    plt.grid(True)
+    plt.tight_layout()
+    pdf.savefig()
+    plt.close()
+
+    # -------------------------------------------------------------------------------------
+    # Gráfico comparativo: datos originales y filtrados
+    # -------------------------------------------------------------------------------------
+    plt.figure(figsize=(10, 6))
+    plt.scatter(df_spot_2.index + 1, df_spot_2['spots'], label='Original', color='green', s=10)
+    plt.scatter(df_spot_2.index + 1, spots_suave, label='Filtrado Gaussiano', color='red', s=10)
+    plt.xlabel('Días (day)')
+    plt.ylabel('Manchas solares (spots)')
+    plt.title('Datos originales y filtrados')
+    plt.legend()
+    plt.grid(True)
+    plt.tight_layout()
+    pdf.savefig()
+    plt.close()
+
+# -------------------------------------------------------------------------------------------------------------
+# Calcular el período dominante del ciclo solar y guardar resultado + gráfica
+# -------------------------------------------------------------------------------------------------------------
+
+# FFT sobre los datos suavizados
+x = df_spot_2.index + 1  # desde 1 hasta N
+yf = np.fft.fft(spots_suave)
+xf = np.fft.fftfreq(len(yf), d=1)  # d=1 porque cada muestra es 1 día
+
+# Tomar solo la parte positiva de la frecuencia
+indices_positivos = xf > 0
+xf_pos = xf[indices_positivos]
+yf_pos = yf[indices_positivos]
+
+# Amplitud normalizada
+amplitud = (2.0 / len(yf)) * np.abs(yf_pos)
+
+# Encontrar frecuencia dominante
+indice_max = np.argmax(amplitud)
+frecuencia_dominante = xf_pos[indice_max]
+
+# Calcular período en días
+periodo_dominante = 1.0 / frecuencia_dominante if frecuencia_dominante != 0 else np.inf
+
+# -------------------------------------------------------------------------------------------------------------
+# Guardar SOLO el valor en el archivo 2.b.txt
+# -------------------------------------------------------------------------------------------------------------
+with open("2.b.txt", "w", encoding="utf-8") as f:
+    if np.isfinite(periodo_dominante):
+        f.write(f"{periodo_dominante:.1f} días")
+    else:
+        f.write("No se pudo determinar el período (frecuencia dominante = 0).")
+
+# -------------------------------------------------------------------------------------------------------------
+# Graficar amplitud vs frecuencia y guardar como PDF (complemento)
+# -------------------------------------------------------------------------------------------------------------
+plt.figure(figsize=(10, 6))
+plt.scatter(xf_pos, amplitud, color='purple', s=15)
+plt.xlabel('Frecuencia (ciclos por día)')
+plt.ylabel('Intensidad')
+plt.title('Espectro de frecuencias de la señal suavizada')
+plt.grid(True)
+plt.tight_layout()
+plt.savefig("2.b.txt_complemento.pdf")
+plt.close()
+
+# ------------------------------------------------------------------------------------------------------------
+# 2.b.maxima.pdf Máximos locales de la señal filtrada (varias gráficas en un solo PDF)
+# ------------------------------------------------------------------------------------------------------------
+
+# Encontrar índices de máximos locales; ajusta 'distance' para la separación mínima entre picos
+peaks_indices, _ = find_peaks(spots_suave, distance=2500)  # ajusta según tu data
+
+with PdfPages("2.b.maxima.pdf") as pdf:
+
+    # -------------------------------
+    # Gráfica 1: Señal filtrada + picos
+    # -------------------------------
+    plt.figure(figsize=(10, 6))
+    plt.scatter((df_spot_2.index[peaks_indices] + 1), spots_suave[peaks_indices],
+                color='red', s=10, label='Máximos locales')
+    plt.plot(df_spot_2.index + 1, spots_suave, color='green', alpha=0.6, label='Señal suavizada')
+    plt.xlabel('Día (índice)')
+    plt.ylabel('Manchas solares (spots)')
+    plt.title('Máximos locales de manchas solares en señal filtrada')
+    plt.legend()
+    plt.grid(True)
+    plt.tight_layout()
+    pdf.savefig()
+    plt.close()
+
+    # -------------------------------
+    # Gráfica 2: Valores de máximos vs día
+    # -------------------------------
+    dias_maximos = (df_spot_2.index[peaks_indices] + 1)
+    spots_maximos = spots_suave[peaks_indices]
+
+    plt.figure(figsize=(10, 6))
+    plt.scatter(dias_maximos, spots_maximos, color='darkorange', s=40)
+    plt.xlabel('Día')
+    plt.ylabel('Manchas solares en el máximo')
+    plt.title('Máximos locales vs Día')
+    plt.grid(True)
+    plt.tight_layout()
+    pdf.savefig()
+    plt.close()
 
 
 #3Filtrando imágenes (FFT 2D)
@@ -583,7 +807,6 @@ If = np.clip(If, 0.0, 1.0)
 out_uint8 = (If*255.0).round().astype(np.uint8)
 Image.fromarray(out_uint8).save("3.b.b.png")
 print("Guardado 3.b.b.png")
-
 
 
 
