@@ -327,10 +327,7 @@ print("Tamaño:", I.shape)
 
 F   = np.fft.fft2(I)
 Fsh = np.fft.fftshift(F)
-
 mag = np.log1p(np.abs(Fsh))
-
-
 
 # Bloque 3R — (reemplaza tu Bloque 3)
 
@@ -384,7 +381,6 @@ def build_wedge_notch_mask(shape_hw, angles_deg, width_deg=3.0, r_min=12, r_max=
     r_min      : radio mínimo para NO tocar el DC (centro).
     r_max      : radio máximo (si None, usa el máximo posible).
     """
-    import numpy as np
 
     H, W = shape_hw
     if r_max is None:
@@ -469,11 +465,7 @@ bins = 360
 hist, edges = np.histogram(th[valid], bins=bins, range=(0,180), weights=Mag[valid])
 ang_centers = 0.5*(edges[1:] + edges[:-1])
 
-plt.figure(figsize=(8,3), dpi=120)
-plt.plot(ang_centers, hist)
-plt.xlabel("Ángulo [°]"); plt.ylabel("Energía (ponderada)")
-plt.title("Histograma angular del espectro (excluyendo DC)")
-plt.tight_layout(); 
+
 
 # Bloque b — Detectar automáticamente TODOS los picos angulares significativos
 
@@ -588,7 +580,6 @@ F_filt[cy, cx] = Fsh[cy, cx]  # conservar brillo global
 If = np.fft.ifft2(np.fft.ifftshift(F_filt)).real
 If = np.clip(If, 0.0, 1.0)
 
-from PIL import Image
 out_uint8 = (If*255.0).round().astype(np.uint8)
 Image.fromarray(out_uint8).save("3.b.b.png")
 print("Guardado 3.b.b.png")
@@ -746,8 +737,3 @@ ax2.axis('off')
 plt.tight_layout()
 plt.savefig('comparacion_tomografia.png', bbox_inches='tight', dpi=150)  # <— guardado en carpeta actual
 plt.close()
-
-
-
-
-
