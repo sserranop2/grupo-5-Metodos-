@@ -7,6 +7,9 @@ from dataclasses import dataclass
 from scipy.integrate import solve_ivp
 import math
 from matplotlib.ticker import ScalarFormatter
+from scipy.special import betainc
+import warnings
+warnings.filterwarnings('ignore')
 
 # 1. Cantidades conservadas
 def zoom(ax, y):
@@ -232,3 +235,222 @@ def run_1c(save_as="1.c.pdf"):
     plt.close(fig)
 
 run_1c("1.c.pdf")
+
+def punto_5():
+    """
+    Punto 5: Circuito genético oscilatorio
+    """
+    print("Resolviendo Punto 5: Circuito genético oscilatorio...")
+    
+    def genetic_circuit(t, y, alpha, beta, alpha0, n):
+        """
+        Sistema de ecuaciones para el circuito genético
+        y = [m1, m2, m3, p1, p2, p3]
+        """
+        m1, m2, m3, p1, p2, p3 = y
+        
+        # Ecuaciones para mRNA (índices cíclicos: p0 ≡ p3)
+        dm1dt = alpha / (1 + p3**n) + alpha0 - m1
+        dm2dt = alpha / (1 + p1**n) + alpha0 - m2
+        dm3dt = alpha / (1 + p2**n) + alpha0 - m3
+        
+        # Ecuaciones para proteínas
+        dp1dt = -beta * (p1 - m1)
+        dp2dt = -beta * (p2 - m2)
+        dp3dt = -beta * (p3 - m3)
+        
+        return [dm1dt, dm2dt, dm3dt, dp1dt, dp2dt, dp3dt]
+    
+    # Parámetros
+    n = 2
+    alphas = np.logspace(0, 5, 50)  # α ∈ [1, 10^5]
+    betas = np.logspace(0, 2, 50)   # β ∈ [1, 100]
+    t_max = 400
+    
+    # Matriz para almacenar amplitudes
+    amplitudes = np.zeros((len(betas), len(alphas)))
+    
+    for i, beta in enumerate(betas):
+        for j, alpha in enumerate(alphas):
+            alpha0 = alpha / 1000
+            
+            # Condiciones iniciales (pequeñas perturbaciones para evitar equilibrio trivial)
+            y0 = [0.1, 0.1, 0.1, 0.1, 0.1, 0.1]
+            
+            try:
+                # Resolver el sistema
+                t_eval = np.linspace(0, t_max, 10000)
+                sol = solve_ivp(genetic_circuit, [0, t_max], y0, 
+                              args=(alpha, beta, alpha0, n), 
+                              t_eval=t_eval, method='LSODA', 
+                              rtol=1e-8, atol=1e-10)
+                
+                if sol.success:
+                    # Extraer p3 y calcular amplitud de las últimas oscilaciones
+                    p3 = sol.y[5]  # p3 está en el índice 5
+                    
+                    # Tomar la última parte de la simulación (después de ~10 oscilaciones)
+                    start_idx = len(t_eval) // 2  # Segunda mitad
+                    p3_final = p3[start_idx:]
+                    
+                    # Calcular amplitud como diferencia entre max y min
+                    amplitude = np.max(p3_final) - np.min(p3_final)
+                    amplitudes[i, j] = amplitude
+                else:
+                    amplitudes[i, j] = np.nan
+                    
+            except Exception as e:
+                amplitudes[i, j] = np.nan
+    
+    # Reemplazar valores muy pequeños o NaN
+    amplitudes[amplitudes < 1e-10] = 1e-10
+    amplitudes[np.isnan(amplitudes)] = 1e-10
+    
+    # Crear la gráfica
+    plt.figure(figsize=(10, 8))
+    
+    # Usar log10 de la amplitud para el color
+    log_amplitudes = np.log10(amplitudes)
+    
+    # Crear meshgrid para pcolormesh
+    Alpha, Beta = np.meshgrid(alphas, betas)
+    
+    plt.pcolormesh(Alpha, Beta, log_amplitudes, shading='auto', cmap='viridis')
+    plt.colorbar(label='log₁₀(Amplitud)')
+    
+    plt.xscale('log')
+    plt.yscale('log')
+    plt.xlabel('α')
+    plt.ylabel('β')
+    plt.title('Amplitud de oscilación de p₃ en circuito genético')
+    plt.grid(True, alpha=0.3)
+    
+    plt.tight_layout()
+    plt.savefig('5.pdf', dpi=300, bbox_inches='tight')
+    plt.close()
+    
+    print("Punto 5 completado. Gráfica guardada en '5.pdf'")
+
+def punto_6():
+    """
+    Punto 6: Teoría de vigas quasiestáticas
+    """
+    print("Resolviendo Punto 6: Teoría de vigas quasiestáticas...")
+    
+    def beam_equations(x, y):
+        """
+        Sistema de ecuaciones de Timoshenko-Ehrenfest
+        y = [phi, dphi_dx, EI_dphi_dx, w]
+        """
+        phi, dphi_dx, EI_dphi_dx, w = y
+        
+        # Parámetros
+        E, I, A, G, kappa = 1, 1, 1, 1, 5/6
+        
+        # Fuerza aplicada usando beta incompleta regularizada
+        q_x = betainc(3, 6, x)
+        
+        # Ecuaciones del sistema
+        d_phi = dphi_dx
+        d_dphi_dx = EI_dphi_dx / (E * I)
+        d_EI_dphi_dx = q_x
+        d_w = phi - EI_dphi_dx / (kappa * A * G)
+        
+        return [d_phi, d_dphi_dx, d_EI_dphi_dx, d_w]
+    
+    # Dominio de la viga
+    x_span = [0, 1]
+    x_eval = np.linspace(0, 1, 1000)
+    
+    # Condiciones iniciales (todas cero como sugiere la pista)
+    y0 = [0, 0, 0, 0]  # [phi(0), phi'(0), (EI*phi')(0), w(0)]
+    
+    # Resolver el sistema
+    sol = solve_ivp(beam_equations, x_span, y0, t_eval=x_eval, 
+                   method='RK45', rtol=1e-8, atol=1e-10)
+    
+    if not sol.success:
+        print("Error en la solución del sistema de vigas")
+        return
+    
+    # Extraer soluciones
+    phi = sol.y[0]
+    w = sol.y[3]
+    
+    # Definir geometría de la viga
+    y_top = 0.2
+    y_bottom = -0.2
+    
+    # Crear puntos para la visualización de la viga
+    n_points = len(x_eval)
+    
+    # Viga antes de la deformación (rectángulo)
+    x_original = x_eval
+    y_top_original = np.full(n_points, y_top)
+    y_bottom_original = np.full(n_points, y_bottom)
+    
+    # Viga después de la deformación
+    # Deformación horizontal: u_x(x,y) = -y*phi(x)
+    # Deformación vertical: u_y(x,y) = w(x)
+    
+    # Puntos deformados para la superficie superior (y = y_top)
+    x_top_def = x_eval - y_top * phi  # x + u_x
+    y_top_def = y_top_original + w     # y + u_y
+    
+    # Puntos deformados para la superficie inferior (y = y_bottom)
+    x_bottom_def = x_eval - y_bottom * phi  # x + u_x
+    y_bottom_def = y_bottom_original + w    # y + u_y
+    
+    # Crear la gráfica
+    plt.figure(figsize=(12, 8))
+    
+    # Viga original
+    plt.fill_between(x_original, y_bottom_original, y_top_original, 
+                     alpha=0.3, color='gray', label='Viga original')
+    plt.plot(x_original, y_top_original, 'k--', linewidth=1, alpha=0.7)
+    plt.plot(x_original, y_bottom_original, 'k--', linewidth=1, alpha=0.7)
+    
+    # Viga deformada
+    plt.fill_between(x_top_def, y_bottom_def, y_top_def, 
+                     alpha=0.6, color='red', label='Viga deformada')
+    plt.plot(x_top_def, y_top_def, 'r-', linewidth=2, label='Superficie superior deformada')
+    plt.plot(x_bottom_def, y_bottom_def, 'r-', linewidth=2, label='Superficie inferior deformada')
+    
+    # Línea central deformada
+    x_center_def = x_eval
+    y_center_def = w
+    plt.plot(x_center_def, y_center_def, 'b-', linewidth=2, label='Línea central deformada')
+    
+    # Configuración de la gráfica
+    plt.xlabel('x (longitud de la viga)')
+    plt.ylabel('y (altura)')
+    plt.title('Deformación de viga con carga distribuida\n(Teoría de Timoshenko-Ehrenfest)')
+    plt.legend()
+    plt.grid(True, alpha=0.3)
+    plt.axis('equal')
+    
+    # Añadir anotaciones
+    plt.annotate('Extremo fijo', xy=(0, 0), xytext=(0.1, 0.3),
+                arrowprops=dict(arrowstyle='->', color='black', alpha=0.7))
+    plt.annotate('Extremo libre', xy=(1, w[-1]), xytext=(0.8, w[-1] + 0.1),
+                arrowprops=dict(arrowstyle='->', color='black', alpha=0.7))
+    
+    plt.tight_layout()
+    plt.savefig('6.pdf', dpi=300, bbox_inches='tight')
+    plt.close()
+    
+    print("Punto 6 completado. Gráfica guardada en '6.pdf'")
+    print(f"Deformación máxima vertical: {np.max(np.abs(w)):.6f}")
+    print(f"Deformación máxima horizontal: {np.max(np.abs(phi)):.6f}")
+
+if __name__ == "__main__":
+    # Resolver punto 5
+    punto_5()
+    
+    # Resolver punto 6
+    punto_6()
+    
+    print("\n¡Puntos 5 y 6 completados exitosamente!")
+    print("Archivos generados:")
+    print("- 5.pdf: Mapa de amplitudes del circuito genético")
+    print("- 6.pdf: Deformación de la viga")
