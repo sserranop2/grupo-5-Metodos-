@@ -7,9 +7,12 @@ from dataclasses import dataclass
 from scipy.integrate import solve_ivp
 import math
 from matplotlib.ticker import ScalarFormatter
+import csv
+from scipy.optimize import brentq
 from scipy.special import betainc
 import warnings
 warnings.filterwarnings('ignore')
+
 
 # 1. Cantidades conservadas
 def zoom(ax, y):
@@ -454,3 +457,106 @@ if __name__ == "__main__":
     print("Archivos generados:")
     print("- 5.pdf: Mapa de amplitudes del circuito genético")
     print("- 6.pdf: Deformación de la viga")
+
+
+#7 Perfil de densidad estelar
+# --- utilidades compactas ---
+def is_int(n: float) -> bool:          # ¿n entero?
+    return float(n).is_integer()
+
+def series_center(n, x):               # expansión regular en x≈0
+    return (1 - x*x/6 + n*x**4/120, -x/3 + n*x**3/30)
+
+# evento: θ=0 (descendiendo)
+def ev_zero(x, y): return y[0]
+ev_zero.terminal, ev_zero.direction = True, -1.0
+
+# refinamiento de raíz sobre la solución densa
+def refine_root(sol, a, b):
+    f = lambda xx: float(sol.sol(xx)[0])
+    return float(brentq(f, a, b, xtol=1e-14, rtol=1e-12))
+
+def solve_polytrope(n, x_plot_max=32.0, x_table_max=None):
+    """Devuelve (x*, θ'(x*), M, ρc/<ρ>, (xx,θ)) con una única integración SciPy."""
+    if x_table_max is None: x_table_max = 120.0 if n <= 4.5 else 600.0
+    eps0 = 1e-8
+    y0 = series_center(n, eps0)
+
+    # RHS seguro hasta el primer cero: clamp cuando n no entero y θ<0
+    def rhs_upto_zero(x, y):
+        th, thp = y
+        thn = th**n if (is_int(n) or th >= 0.0 or n == 0.0) else 0.0
+        return (thp, -(2/x)*thp - (1.0 if n==0.0 else thn))
+
+    sol = solve_ivp(rhs_upto_zero, (eps0, x_table_max), y0,
+                    events=ev_zero, method="DOP853",
+                    rtol=1e-11, atol=1e-14, max_step=0.02, dense_output=True)
+
+    # ¿hubo cruce?
+    if sol.t_events[0].size:
+        x_star = float(sol.t_events[0][0])
+        th_star, thp_star = sol.sol(x_star)
+        M  = - x_star**2 * thp_star
+        Rr = - (1/3) * (x_star / thp_star)
+
+        # curva hasta x* y extensión (solo para la figura)
+        xs = np.linspace(sol.t[0], min(x_star, x_plot_max), 1500)
+        th = sol.sol(xs)[0]
+        if x_star < x_plot_max:
+            δ = 1e-8*(1+x_star)
+            x0 = x_star + δ
+            y0_ext = (thp_star*δ, thp_star)
+            # tras el cero: entero→θ^n; fraccionario→|θ|^n
+            def rhs_ext(x, y):
+                th, thp = y
+                base = th**n if is_int(n) else abs(th)**n
+                return (thp, -(2/x)*thp - base)
+            sol2 = solve_ivp(rhs_ext, (x0, x_plot_max), y0_ext,
+                             method="DOP853", rtol=1e-11, atol=1e-14,
+                             max_step=0.02, dense_output=True)
+            xs2 = np.linspace(x0, x_plot_max, 900)
+            th2 = sol2.sol(xs2)[0]
+            xs, th = np.concatenate([xs, xs2]), np.concatenate([th, th2])
+        return x_star, float(thp_star), float(M), float(Rr), (xs, th)
+
+    # sin cruce (≈ n=5): radio ∞; masa por límite; ρc/<ρ>=∞
+    X  = sol.t[-1]
+    thp_last = float(sol.y[1, -1])
+    M = - X**2 * thp_last
+    xs = np.linspace(sol.t[0], x_plot_max, 1500)
+    th = sol.sol(xs)[0]
+    return float('inf'), thp_last, float(M), float('inf'), (xs, th)
+
+def run_7(save_csv="7.csv", save_fig="7.pdf"):
+    x_plot_max = 32.0
+    ns = [0.0, 1.0, 1.5, 2.0, 3.0, 4.0, 4.5, 5.0]
+
+    rows = [("Índice n","Radio x*","Masa (∝ -x*^2 θ'(x*))","ρ_c/⟨ρ⟩")]
+    curves = {}
+    for n in ns:
+        x_star, thp_star, M, Rr, (xx, th) = solve_polytrope(
+            n, x_plot_max=x_plot_max, x_table_max=(120.0 if n <= 4.5 else 600.0)
+        )
+        fmt = lambda v: "inf" if (isinstance(v,float) and np.isinf(v)) else f"{v:.5f}"
+        rows.append((f"{n:.1f}", fmt(x_star), fmt(M), fmt(Rr)))
+        curves[n] = (xx, th)
+
+    with open(save_csv, "w", newline="", encoding="utf-8") as f:
+        csv.writer(f).writerows(rows)
+
+    fig, ax = plt.subplots(figsize=(16, 5.2), constrained_layout=True)
+    palette = ["tab:blue","tab:orange","tab:green","tab:red","tab:purple",
+               "sienna","tab:pink","tab:gray"]
+    for i, n in enumerate(ns):
+        xx, th = curves[n]
+        ax.plot(xx, th, lw=2, color=palette[i%len(palette)], label=f"{n:g}")
+    ax.set(xlim=(0, x_plot_max), ylim=(-0.4, 1.0),
+           xlabel="Dimensionless radius", ylabel=r"$\theta(x)$")
+    ax.axhline(0, color="k", lw=0.9, ls="--", alpha=0.45)
+    ax.legend(title="Polytropic index", ncols=8, frameon=False, fontsize=9, loc="upper right")
+    ax.grid(True, alpha=0.25)
+    ax.yaxis.set_major_formatter(ScalarFormatter(useOffset=False))
+    fig.savefig(save_fig, dpi=200)
+    plt.close(fig)
+
+run_7("7.csv", "7.pdf")
