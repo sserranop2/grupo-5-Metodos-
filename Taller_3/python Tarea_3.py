@@ -418,7 +418,10 @@ for n in range(to_plot):
 plt.xlim(0, 12);  plt.ylim(-1.15, 0.05)
 plt.xlabel("x");  plt.ylabel("Energy")
 plt.legend(loc="lower left")
-plt.grid(alpha=0.3); plt.tight_layout(); plt.show()
+plt.grid(alpha=0.3); plt.tight_layout()
+
+plt.savefig("3.pdf", bbox_inches="tight")
+
 
 
 
