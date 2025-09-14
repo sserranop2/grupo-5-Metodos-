@@ -12,6 +12,7 @@ from scipy.optimize import brentq
 from scipy.special import betainc
 import warnings
 warnings.filterwarnings('ignore')
+import pandas as pd
 
 
 # 1. Cantidades conservadas
@@ -239,6 +240,342 @@ def run_1c(save_as="1.c.pdf"):
 
 run_1c("1.c.pdf")
 
+#pto 3
+
+hbar = 0.1
+a = 0.8
+x0 = 10.0
+
+def V(x):
+    return (1.0 - np.exp(a*(x - x0)))**2 - 1.0
+
+def rhs(x, y, E):
+    psi, phi = y
+    dpsi = phi
+    dphi = ((V(x) - E) / (hbar**2)) * psi
+    return np.array([dpsi, dphi], dtype=float)
+
+def rk4_step(fun, x, y, h, E):
+    k1 = fun(x, y, E)
+    k2 = fun(x + 0.5*h, y + 0.5*h*k1, E)
+    k3 = fun(x + 0.5*h, y + 0.5*h*k2, E)
+    k4 = fun(x + h, y + h*k3, E)
+    return y + (h/6.0)*(k1 + 2*k2 + 2*k3 + k4)
+
+def turning_points(E, x_min=0.0, x_max=20.0, N=4000):
+    xs = np.linspace(x_min, x_max, N+1)
+    vals = [V(x) - E for x in xs]
+    roots = []
+    for i in range(N):
+        if vals[i] == 0:
+            roots.append(xs[i])
+        elif vals[i]*vals[i+1] < 0:
+            a_, b_ = xs[i], xs[i+1]
+            fa, fb = vals[i], vals[i+1]
+            for _ in range(30):
+                m = 0.5*(a_ + b_)
+                fm = V(m) - E
+                if fa*fm <= 0:
+                    b_, fb = m, fm
+                else:
+                    a_, fa = m, fm
+            roots.append(0.5*(a_ + b_))
+    if len(roots) >= 2:
+        return roots[0], roots[-1]
+    return None, None
+
+def shoot_norm(E, dx=0.01):
+    x1, x2 = turning_points(E)
+    if x1 is None:
+        return np.inf, None, None, None
+    xL = x1 - 2.0
+    xR = x2 + 1.0
+    y = np.array([0.0, 1e-8], dtype=float)
+    xs = [xL]
+    psis = [y[0]]
+    x = xL
+    steps = int(math.ceil((xR - xL)/dx))
+    h = (xR - xL)/steps
+    for _ in range(steps):
+        if abs(y[0]) > 1e6 or abs(y[1]) > 1e6:
+            return 1e12, None, None, None
+        y = rk4_step(rhs, x, y, h, E)
+        x += h
+        xs.append(x)
+        psis.append(float(y[0]))
+    psi_end, phi_end = y[0], y[1]
+    norm = math.hypot(psi_end, phi_end)
+    return norm, np.array(xs), np.array(psis), (xL, xR)
+
+def find_local_minima(E_grid, norms):
+    mins = []
+    for i in range(1, len(E_grid)-1):
+        if norms[i] < norms[i-1] and norms[i] < norms[i+1]:
+            mins.append(i)
+    return mins
+
+def golden_section_minimize(f, a_, b_, tol=1e-8, maxit=80):
+    gr = (math.sqrt(5)-1)/2
+    c = b_ - gr*(b_ - a_)
+    d = a_ + gr*(b_ - a_)
+    fc = f(c)
+    fd = f(d)
+    for _ in range(maxit):
+        if abs(b_ - a_) < tol:
+            break
+        if fc < fd:
+            b_, d, fd = d, c, fc
+            c = b_ - gr*(b_ - a_)
+            fc = f(c)
+        else:
+            a_, c, fc = c, d, fd
+            d = a_ + gr*(b_ - a_)
+            fd = f(d)
+    if fc < fd:
+        return c, fc
+    else:
+        return d, fd
+
+def compute_all():
+    E_grid = np.linspace(-0.99, -1e-5, 1200)
+    norms = []
+    for E in E_grid:
+        n, *_ = shoot_norm(E)
+        norms.append(n)
+    norms = np.array(norms)
+    idxs = find_local_minima(E_grid, norms)
+    Es_num = []
+    Psis = []
+    Xs = []
+    for i in idxs:
+        i0 = max(i-2, 0)
+        i1 = min(i+2, len(E_grid)-1)
+        aE = E_grid[i0]
+        bE = E_grid[i1]
+        def f(E):
+            n, *_ = shoot_norm(E)
+            return n
+        E_star, _ = golden_section_minimize(f, aE, bE, tol=1e-10)
+        norm, xs, psis, _ = shoot_norm(E_star)
+        if math.isfinite(norm):
+            Es_num.append(E_star)
+            Xs.append(xs)
+            Psis.append(psis)
+    order = np.argsort(Es_num)
+    Es_num = [Es_num[i] for i in order]
+    Xs     = [Xs[i] for i in order]
+    Psis   = [Psis[i] for i in order]
+    return Es_num, Xs, Psis, (E_grid, norms)
+
+Es_num, Xs, Psis, scan = compute_all()
+
+lam = 1.0/(a*hbar)
+n_max = int(math.floor((lam - 0.5) + 1e-12))
+
+def E_teo(n):
+    return (2*lam - (n + 0.5))*(n + 0.5)/(lam**2) - 1.0
+
+Es_teo = [E_teo(n) for n in range(n_max)]
+
+m = min(len(Es_num), len(Es_teo))
+df = pd.DataFrame({
+    "n": range(m),
+    "E_num": [Es_num[i] for i in range(m)],
+    "E_teo": [Es_teo[i] for i in range(m)],
+})
+df["Diff_%"] = (abs(df["E_num"] - df["E_teo"]) / df["E_teo"].abs().clip(lower=1e-14)) * 100.0
+
+df_out = df.copy()
+df_out.to_csv("3.txt", sep="\t", index=False, float_format="%.10f")
+print("Archivo escrito: 3.txt")
+
+xx = np.linspace(0, 12, 1000)
+Vv = V(xx)
+
+plt.figure(figsize=(7.5, 5.2))
+plt.plot(xx, Vv, color='k', linewidth=2.0, label='Morse potential')
+
+to_plot = min(len(Es_num), n_max)
+
+def spacing_local(k):
+    up = Es_num[k+1] - Es_num[k] if k+1 < to_plot else np.inf
+    dn = Es_num[k]   - Es_num[k-1] if k-1 >= 0      else np.inf
+    return min(up, dn)
+
+for n in range(to_plot):
+    E = Es_num[n]
+    x = Xs[n]; psi = Psis[n]
+    msk = (x >= 0) & (x <= 12)
+    if not np.any(msk):
+        continue
+    x_cut  = x[msk]
+    psi_cut = psi[msk]
+    s = 0.45 * spacing_local(n)
+    psi_vis = psi_cut/(np.max(np.abs(psi_cut)) + 1e-15) * s + E
+    plt.plot(x_cut, psi_vis, lw=1.4)
+    plt.hlines(E, 0, 12, linestyles='dotted', linewidth=0.8, color='0.7')
+
+plt.xlim(0, 12);  plt.ylim(-1.15, 0.05)
+plt.xlabel("x");  plt.ylabel("Energy")
+plt.legend(loc="lower left")
+plt.grid(alpha=0.3); plt.tight_layout(); plt.show()
+
+
+
+#Pto 4
+def f(state, alpha):
+    """Campo vectorial. state = [theta, r, Pth, Pr]."""
+    theta, r, Pth, Pr = state
+    den = 1.0 + r
+    if den <= 1e-8:
+        den = 1e-8
+    dtheta = Pth / (den**2)
+    dr = Pr
+    dPth = - (alpha**2) * den * np.sin(theta)
+    dPr  =   (alpha**2) * np.cos(theta) - r + (Pth**2) / (den**3)
+    return np.array([dtheta, dr, dPth, dPr], dtype=float)
+
+def rk4_step(state, h, alpha):
+    k1 = f(state, alpha)
+    k2 = f(state + 0.5*h*k1, alpha)
+    k3 = f(state + 0.5*h*k2, alpha)
+    k4 = f(state + h*k3, alpha)
+    return state + (h/6.0)*(k1 + 2*k2 + 2*k3 + k4)
+
+def theta_dot(state, alpha):
+    _, r, Pth, _ = state
+    den = max(1e-8, 1.0 + r)
+    return Pth / (den**2)
+
+def wrap_pi(x):
+    return np.arctan2(np.sin(x), np.cos(x))
+
+def H(state, alpha):
+    theta, r, Pth, Pr = state
+    den = 1.0 + r
+    if den <= 1e-8:
+        den = 1e-8
+    return 0.5*Pr**2 + 0.5*(Pth**2)/(den**2) + 0.5*r**2 - (alpha**2)*den*np.cos(theta)
+
+def drift_energia_abs(alpha=1.1, tmax=2000.0, dt=0.02):
+    state = np.array([np.pi/2, 0.0, 0.0, 0.0], float)
+    H0 = H(state, alpha)
+    t = 0.0
+    max_abs = 0.0
+    while t < tmax:
+        state = rk4_step(state, dt, alpha)
+        Hi = H(state, alpha)
+        max_abs = max(max_abs, abs(Hi - H0))
+        t += dt
+    rel = max_abs / (1.0 + abs(H0))
+    print(f"[alpha={alpha:.3f}] |H-H0|_max ≈ {max_abs:.3e}   (rel≈{rel:.3e}, H0={H0:.3e})")
+
+def grafica_energia(alpha=1.1, tmax=200.0, dt=0.02):
+    state = np.array([np.pi/2, 0.0, 0.0, 0.0], float)
+    H0 = H(state, alpha)
+    ts, Hs = [0.0], [H0]
+    t = 0.0
+    while t < tmax:
+        state = rk4_step(state, dt, alpha)
+        t += dt
+        ts.append(t); Hs.append(H(state, alpha))
+    plt.figure(figsize=(6,3))
+    plt.plot(ts, np.array(Hs) - H0, lw=1)
+    plt.xlabel("t"); plt.ylabel("H(t) - H0")
+    plt.title(f"Energía - alpha={alpha:.3f}")
+    plt.tight_layout(); plt.show()
+
+def seccion_poincare(alpha, tmax=1_000.0, dt=0.02,
+                     thetas=(0.0,), sentido="ambos", max_puntos=np.inf):
+    """
+    Devuelve arrays (r, Pr) cuando θ cruza cualquiera de las θ_k en 'thetas'.
+    - sentido: "ambos" (default), "+" (sólo dθ/dt>0) o "-" (sólo dθ/dt<0)
+    - thetas: iterable de valores objetivo para θ_k
+    CI del enunciado: θ0 = π/2, r0=0, Pθ0=0, Pr0=0
+    """
+    thetas = np.atleast_1d(np.array(thetas, float))
+    state = np.array([np.pi/2, 0.0, 0.0, 0.0], dtype=float)
+    t = 0.0
+    r_sec, Pr_sec = [], []
+    while t < tmax and len(r_sec) < max_puntos:
+        s0 = state
+        th0 = s0[0]
+        s1 = rk4_step(s0, dt, alpha)
+        th1 = s1[0]
+        for thk in thetas:
+            phi0 = wrap_pi(th0 - thk)
+            phi1 = wrap_pi(th1 - thk)
+            if (phi0 <= 0.0 and phi1 > 0.0) or (phi0 >= 0.0 and phi1 < 0.0):
+                denom = (phi1 - phi0)
+                if abs(denom) < 1e-14:
+                    continue
+                frac = np.clip(-phi0/denom, 0.0, 1.0)
+                sc = s0 + frac*(s1 - s0)
+                v = theta_dot(sc, alpha)
+                if (sentido == "+") and not (v > 0.0):
+                    continue
+                if (sentido == "-") and not (v < 0.0):
+                    continue
+                r_sec.append(sc[1])
+                Pr_sec.append(sc[3])
+                if len(r_sec) >= max_puntos:
+                    break
+        state = s1
+        t += dt
+    return np.array(r_sec), np.array(Pr_sec)
+
+def run_experimento(
+    alphas=np.linspace(1.0, 1.2, 9),
+    tmax=2_000.0,
+    dt=0.02,
+    warmup=300.0,
+    puntos_max_por_alpha=np.inf,
+    num_secciones=1,
+    thetas=None,
+    sentido="ambos",
+    archivo_salida="secciones.pdf"
+):
+    if thetas is None:
+        thetas = np.linspace(0.0, 2*np.pi, num_secciones, endpoint=False)
+    for a in alphas:
+        seccion_poincare(a, tmax=warmup, dt=dt, thetas=thetas, sentido=sentido, max_puntos=0)
+    plt.figure(figsize=(7, 5))
+    for a in alphas:
+        r_pts, Pr_pts = seccion_poincare(
+            a, tmax=tmax, dt=dt, thetas=thetas, sentido=sentido,
+            max_puntos=puntos_max_por_alpha
+        )
+        if len(r_pts) == 0:
+            print(f"Advertencia: no hubo cruces para alpha={a:.3f}")
+            continue
+        plt.scatter(r_pts, Pr_pts, s=6, label=fr"$\alpha={a:.3f}$", alpha=0.75)
+    plt.xlabel(r"$r$")
+    plt.ylabel(r"$P_r$")
+    plt.title(r"Sección de Poincaré: $\theta=0$ (ambos sentidos)")
+    plt.legend(loc="best", markerscale=2, fontsize=9)
+    plt.tight_layout()
+    plt.savefig(archivo_salida, dpi=300)
+    plt.show()
+    print(f"Figura guardada en: {archivo_salida}")
+
+drift_energia_abs(alpha=1.10, tmax=2_000.0, dt=0.02)
+grafica_energia(alpha=1.10, tmax=400.0, dt=0.02)
+
+alphas = np.linspace(1.0, 1.2, 9)
+run_experimento(
+    alphas=alphas,
+    tmax=10_000.0,
+    dt=0.02,
+    warmup=300.0,
+    puntos_max_por_alpha=np.inf,
+    thetas=(0.0,),
+    num_secciones=1,
+    sentido="ambos",
+    archivo_salida="4.pdf"
+)
+
+
+#Punto 5
 def punto_5():
     """
     Punto 5: Circuito genético oscilatorio
@@ -544,7 +881,7 @@ def run_7(save_csv="7.csv", save_fig="7.pdf"):
     with open(save_csv, "w", newline="", encoding="utf-8") as f:
         csv.writer(f).writerows(rows)
 
-    fig, ax = plt.subplots(figsize=(16, 5.2), constrained_layout=True)
+    fig, ax = plt.subplots(figsize=(19, 9), constrained_layout=True)
     palette = ["tab:blue","tab:orange","tab:green","tab:red","tab:purple",
                "sienna","tab:pink","tab:gray"]
     for i, n in enumerate(ns):
