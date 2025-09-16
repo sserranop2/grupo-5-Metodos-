@@ -900,3 +900,283 @@ def run_7(save_csv="7.csv", save_fig="7.pdf"):
     plt.close(fig)
 
 run_7("7.csv", "7.pdf")
+
+# --------------------------------------------------
+# Punto 2
+# --------------------------------------------------
+
+# --------------------------------------------------
+# Punto 2.a  Alcance
+# --------------------------------------------------
+
+# -------------------------
+# Parámetros físicos
+# -------------------------
+m = 10.01          # masa bala de cañon en kg
+g = 9.773          # aceleracion de la gravedad en m/s^2
+A = 1.642          # parámetros de beta(y)
+B = 40.624         # parámetros de beta(y)
+D = 2.36           # parámetros de beta(y)
+
+# -------------------------
+# Coeficiente de arrastre dependiente de altura
+# -------------------------
+def beta_y(y: float) -> float:
+    """
+    β(y) = A (1 - y/B)^D, saturado a 0 si y >= B (Es decir que si ocurre y >= B,β=0  ) 
+    (para evitar valores negativos).    Unidades de β ~ kg/m (para que β * v^2 tenga 
+    unidades de Newton).
+    """
+    t = 1.0 - y / B
+    if t <= 0.0:  
+        return 0.0
+    return A * (t ** D)
+
+# -------------------------
+# Dinámica (sistema de 1er orden)
+# z = [x, y, vx, vy]
+# -------------------------
+def f(t, z):
+    x, y, vx, vy = z
+    v = hypot(vx, vy)
+    b = beta_y(y)
+    ax = -(b/m) * v * vx
+    ay = -(b/m) * v * vy - g
+    return [vx, vy, ax, ay]
+
+# -------------------------
+# Evento: volver al suelo (y = 0) en descenso
+# -------------------------
+def ground_event(t, z):
+    # Cero cuando y=0. Con direction=-1 detecta solo cruce descendente.
+    return z[1]
+
+ground_event.terminal = True   # detiene la integración al detectar el evento
+ground_event.direction = -1    # solo cruce hacia abajo (vy < 0)
+
+#------------------------------------------------------------------------------------------------------------------
+# -------------------------
+# Solucion EDO y alcance horizontal
+# -------------------------
+def resolver_trayectoria(v0, theta_deg, tmax=120.0):
+    """Resuelve la EDO y detiene en y=0 descendente."""
+    eps = 1e-9  # evita que el evento dispare en t=0
+    th = radians(theta_deg)
+    z0 = [0.0, eps, v0*cos(th), v0*sin(th)]
+    sol = solve_ivp(
+        f, (0.0, tmax), z0,
+        events=ground_event,
+        rtol=1e-7, atol=1e-9, max_step=0.05
+    )
+    return sol
+
+def alcance_desde_sol(sol):
+    """Alcance horizontal x en el instante del evento (o último x si no hubo evento)."""
+    if sol.y_events and sol.y_events[0].size > 0:
+        return float(sol.y_events[0][0, 0])
+    return float(sol.y[0, -1])
+
+def alcance(v0, theta_deg):
+    """Atajo: resuelve y devuelve solo el alcance."""
+    return alcance_desde_sol(resolver_trayectoria(v0, theta_deg))
+
+def x_max_y_theta_opt(v0, a_deg=10.0, b_deg=80.0):
+    """Para un v0 fijo, halla x_max y el ángulo óptimo en [a_deg, b_deg]."""
+    def neg_range(theta_deg):
+        return -alcance(v0, theta_deg)
+    res = minimize_scalar(neg_range, bounds=(a_deg, b_deg), method='bounded', options={'xatol': 1e-3})
+    return -float(res.fun), float(res.x)
+
+# -------------------------
+# Barrido en v0 y gráfica
+# -------------------------
+v0_vals = np.linspace(20.0, 140.0, 17)  
+x_max_vals = []
+theta_opt_vals = []
+
+for v0 in v0_vals:
+    Rmax, th = x_max_y_theta_opt(v0)
+    x_max_vals.append(Rmax)
+    theta_opt_vals.append(th)
+
+plt.figure(figsize=(6, 4))
+plt.plot(v0_vals, x_max_vals, marker='o')
+plt.xlabel("v0 (m/s)")
+plt.ylabel("x_max (m)")
+plt.title("Alcance máximo x_max vs v0 (drag cuadrático con β(y))")
+plt.grid(True)
+plt.tight_layout()
+plt.savefig("2.a.pdf")
+plt.close()
+
+
+# --------------------------------------------------
+# Punto 2.b  Atinar a un objetivo
+# --------------------------------------------------
+
+# Idea: para una rapidez v0 fija y un objetivo (target_x, target_y),
+# barrer ángulos θ en [a_deg, b_deg]. Simulamos cada tiro y paramos
+# justo cuando x = target_x; medimos la altura y(x=target_x).
+# Definimos miss(θ) = y(x_target; θ) - target_y.
+# - Si |miss| <= tol, aceptamos ese θ.
+# - Si miss cambia de signo entre dos θ consecutivos:
+#     • si el NUEVO miss < 0  -> devolver el θ ANTERIOR  (quedó “bajo”)
+#     • si el NUEVO miss > 0  -> devolver el θ NUEVO     (quedó “alto”)
+
+
+def altura_en_x(v0: float, theta_deg: float, target_x: float, tmax: float = 120.0):
+    """
+    Simula un disparo con (v0, theta_deg) y se detiene justo cuando x = target_x.
+    Returns: (y_en_target, reached, sol)
+      - y_en_target: y cuando x=target_x (si reached=True)
+      - reached: True si se alcanzó x=target_x antes de caer
+      - sol: solución completa (por si se quiere graficar)
+    """
+    eps = 1e-9
+    th = radians(theta_deg)
+    z0 = [0.0, eps, v0*cos(th), v0*sin(th)]
+
+    # Evento "x = target_x" (paramos allí)
+    def x_event(t, z):
+        return z[0] - target_x
+    x_event.terminal = True
+    x_event.direction = +1    # x creciente
+
+    sol = solve_ivp(
+        f, (0.0, tmax), z0,
+        events=[ground_event, x_event],   # suelo y x=target
+        rtol=1e-7, atol=1e-9, max_step=0.05
+    )
+
+    reached_x = (sol.t_events[1].size > 0)
+    if reached_x:
+        y_at_target = float(sol.y_events[1][0, 1])  # y cuando x=target_x
+        return y_at_target, True, sol
+    else:
+        return None, False, sol  # cayó antes o no llegó
+
+def angle_to_hit_target(v0: float, target_x: float, target_y: float,
+                        a_deg: float = 10.0, b_deg: float = 80.0,
+                        step: float = 0.5, tol: float = 0.03):
+    """
+    Devuelve UN ángulo (en grados) que atina al objetivo (target_x, target_y).
+    Si no encuentra, retorna None.
+    """
+    def miss(theta_deg: float):
+        y_at_x, ok, _ = altura_en_x(v0, theta_deg, target_x)
+        if not ok or y_at_x is None:
+            return None
+        return y_at_x - target_y  # >0 alto, <0 bajo
+
+    prev_th, prev_m = None, None
+    best_th, best_err = None, float("inf")
+
+    for th in np.arange(a_deg, b_deg + step, step):
+        m = miss(th)
+        if m is None:
+            continue
+
+        # guardar el mejor por si no hay cruce
+        if abs(m) < best_err:
+            best_err = abs(m); best_th = th
+
+        # acierto directo dentro de tolerancia
+        if abs(m) <= tol:
+            return th
+
+        # cruce de signo con el anterior -> aplica regla
+        if prev_m is not None:
+            if (prev_m > 0 and m < 0):   # de alto a bajo
+                return prev_th
+            if (prev_m < 0 and m > 0):   # de bajo a alto
+                return th
+
+        prev_th, prev_m = th, m
+
+    # si no hubo cruce, aceptamos el mejor SOLO si entra en tol
+    return best_th if best_err <= tol else None
+
+# Prueba
+# v0 = 120.0; tx, ty = 60.0, 10.0
+# th, tag = angle_to_hit_target(v0, tx, ty, step=0.25, tol=0.02)
+# print(f"2.b → ángulo: {th}, tipo: {tag}")
+# if th is not None:
+#     yhit, ok, sol = altura_en_x(v0, th, tx)
+#     plt.figure(); plt.plot(sol.y[0], sol.y[1], label=f"θ={th:.2f}° ({tag})")
+#     plt.scatter([tx],[ty], s=60, marker="x", label="Objetivo")
+#     plt.axhline(0, ls="--", c="k"); plt.grid(True); plt.legend(); plt.tight_layout(); plt.show()
+
+
+# --------------------------------------------------
+# Punto 2.c  Varias opciones para disparar
+# --------------------------------------------------
+# Para un objetivo fijo (x, y), el conjunto de condiciones iniciales (v0, θ0)
+# que pegan forma una CURVA 1D en el plano (v0, θ0).
+# Aquí la construimos parametrizando por v0: para cada v0 buscamos los θ0 que pegan
+# usando la misma regla simple del 2.b (hasta dos soluciones: “baja” y “alta”).
+# Guardamos la figura como 2.c.pdf.
+
+def angles_to_hit_target_both(v0: float, target_x: float, target_y: float,
+                              a_deg: float = 10.0, b_deg: float = 80.0,
+                              step: float = 0.25, tol: float = 0.03):
+    """
+    Devuelve lista con 0, 1 o 2 ángulos (en grados) que atinan al objetivo.
+    Usa la misma regla del 2.b y guarda ambos cruces de signo si aparecen.
+    """
+    def miss(theta_deg: float):
+        y_at_x, ok, _ = altura_en_x(v0, theta_deg, target_x)
+        if not ok or y_at_x is None:
+            return None
+        return y_at_x - target_y  # >0 alto, <0 bajo
+
+    sols = []
+    prev_th, prev_m = None, None
+
+    for th in np.arange(a_deg, b_deg + step, step):
+        m = miss(th)
+        if m is None:
+            continue
+
+        # acierto directo
+        if abs(m) <= tol:
+            sols.append(float(th))
+
+        # cruce de signo -> agregar según la regla
+        if prev_m is not None and (prev_m * m < 0.0):
+            sols.append(float(prev_th if m < 0 else th))
+
+        prev_th, prev_m = th, m
+
+    # ordenar y quitar duplicados cercanos
+    sols = sorted(sols)
+    out = []
+    for th in sols:
+        if not out or abs(th - out[-1]) > 0.05:
+            out.append(th)
+    return out
+
+# Construir y guardar la figura para el objetivo (12 m, 0)
+target_x, target_y = 12.0, 0.0
+v0_vals = np.linspace(20.0, 140.0, 25)
+
+v0_hits = []
+theta_hits = []
+for v0 in v0_vals:
+    thetas = angles_to_hit_target_both(v0, target_x, target_y,
+                                       a_deg=10.0, b_deg=80.0,
+                                       step=0.25, tol=0.02)
+    for th in thetas:
+        v0_hits.append(v0)
+        theta_hits.append(th)
+
+plt.figure(figsize=(6,4))
+if theta_hits:
+    plt.scatter(v0_hits, theta_hits, s=18)
+plt.xlabel("v0 (m/s)")
+plt.ylabel("θ0 (°)")
+plt.title("Condiciones (v0, θ0) que atinan a (x*, y*) = (12 m, 0)")
+plt.grid(True)
+plt.tight_layout()
+plt.savefig("2.c.pdf")
+plt.close()
+
