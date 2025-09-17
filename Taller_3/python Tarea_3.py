@@ -13,6 +13,9 @@ from scipy.special import betainc
 import warnings
 warnings.filterwarnings('ignore')
 import pandas as pd
+from math import cos, sin, radians, hypot
+from scipy.integrate import solve_ivp
+from scipy.optimize import minimize_scalar
 
 
 # 1. Cantidades conservadas
