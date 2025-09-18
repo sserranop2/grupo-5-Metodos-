@@ -40,7 +40,7 @@ def grid_and_matrices(npts=NPTS, xmin=XMIN, xmax=XMAX):
     return x, dx, L
 
 def V_harmonic(x):
-    return -(x**2)/50.0
+    return (x**2)/50.0
 
 def V_quartic(x):
     return (x/5.0)**4
