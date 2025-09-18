@@ -17,16 +17,16 @@ MAX_STEP = 0.1
 FPS = 30
 
 # Tiempos y #frames (≈ duración 10–15 s)
-T_END_A = 150.0; NFR_A = 450
-T_END_B = 50.0;  NFR_B = 300
-T_END_C = 150.0; NFR_C = 450
+T_ARC = 150.0; NFR_A = 450
+T_CUART = 50.0;  NFR_B = 300
+T_SOMBR = 150.0; NFR_C = 450
 
 # Dimensiones pares para evitar errores de ffmpeg (8*144=1152, 4.5*144=648)
 FIG_DPI = 144
 FIG_SIZE = (8.0, 4.5)
 
 # UTILIDADES NUMÉRICAS 
-def grid_and_matrices(npts=NPTS, xmin=XMIN, xmax=XMAX):
+def grid_y_matrices(npts=NPTS, xmin=XMIN, xmax=XMAX):
     """Malla 1D y Laplaciano con BC Neumann como matriz dispersa CSR."""
     x = np.linspace(xmin, xmax, npts, dtype=float)
     dx = x[1] - x[0]
@@ -39,13 +39,13 @@ def grid_and_matrices(npts=NPTS, xmin=XMIN, xmax=XMAX):
     L = (L.tocsr()) / (dx*dx)
     return x, dx, L
 
-def V_harmonic(x):
+def V_armonico(x):
     return (x**2)/50.0
 
-def V_quartic(x):
+def V_cuartico(x):
     return (x/5.0)**4
 
-def V_hat(x):
+def V_sombrero(x):
     return (1.0/50.0)*((x**4)/100.0- x**2)
 
 def psi0_gaussian(x, x0=10.0, k0=2.0, width_coeff=2.0):
@@ -174,7 +174,7 @@ def render_video(x, times, psi_t, Vx, out_mp4, ylim=None, title=None):
         plt.close(fig)
 
 # MÉTRICAS (μ, σ)
-def mu_sigma_over_time(x, psi_t):
+def mu_sigma_t(x, psi_t):
     """Devuelve mu(t), sigma(t) evaluados en snapshots ψ(x,t_k)."""
     dens = np.abs(psi_t)**2
     # Re-normaliza cada snapshot por seguridad numérica
@@ -198,8 +198,8 @@ def save_mu_sigma_pdf(times, mu, sigma, out_pdf, title):
     plt.close(fig)
 
 # PIPELINE DE SIMULACIÓN 
-def simulate_case(V_func, t_end, nframes, out_mp4, out_pdf=None, title=""):
-    x, _dx, L = grid_and_matrices()
+def simulacion(V_func, t_end, nframes, out_mp4, out_pdf=None, title=""):
+    x, _dx, L = grid_y_matrices()
     Vx = V_func(x).astype(float)
 
     # Condición inicial gaussiana con “momento” hacia -x
@@ -230,28 +230,28 @@ def simulate_case(V_func, t_end, nframes, out_mp4, out_pdf=None, title=""):
 
     # Métricas
     if out_pdf is not None:
-        mu, sigma = mu_sigma_over_time(x, psi_t)
+        mu, sigma = mu_sigma_t(x, psi_t)
         save_mu_sigma_pdf(sol.t, mu, sigma, out_pdf, title + r" — $\mu$ y $\sigma$")
 
 #  MAIN 
 def main():
     # 1.a — Oscilador “armónico” 
-    simulate_case(
-        V_func=V_harmonic, t_end=T_END_A, nframes=NFR_A,
+    simulacion(
+        V_func=V_armonico, t_end=T_ARC, nframes=NFR_A,
         out_mp4="1.a.mp4", out_pdf="1.a.pdf",
         title=r"1.a  $V(x)=x^2/50$"
     )
 
-    # 1.b — Oscilador cuártico (solo video)
-    simulate_case(
-        V_func=V_quartic, t_end=T_END_B, nframes=NFR_B,
+    # 1.b — Oscilador cuártico 
+    simulacion(
+        V_func=V_cuartico, t_end=T_CUART, nframes=NFR_B,
         out_mp4="1.b.mp4", out_pdf="1.b.pdf",
         title=r"1.b  $V(x)=(x/5)^4$"
     )
 
-    # 1.c — Potencial del sombrero (video + gráfica μ,σ)
-    simulate_case(
-        V_func=V_hat, t_end=T_END_C, nframes=NFR_C,
+    # 1.c — Potencial del sombrero 
+    simulacion(
+        V_func=V_sombrero, t_end=T_SOMBR, nframes=NFR_C,
         out_mp4="1.c.mp4", out_pdf="1.c.pdf",
         title=r"1.c  $V(x)=\frac{1}{50}\!\left(\frac{x^4}{100}-x^2\right)$"
     )
