@@ -1,20 +1,3 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-"""
-Punto_1.py — Evolución temporal (Schrödinger 1D) con método de líneas.
-Genera:
-  - 1.a.mp4  y 1.a.pdf   (oscilador "armónico": V(x) = -x^2/50)
-  - 1.b.mp4              (oscilador cuártico:   V(x) = (x/5)^4)
-  - 1.c.mp4  y 1.c.pdf   (potencial sombrero:  V(x) = (1/50)*(x^4/100 - x^2))
-
-Requisitos del taller:
-- Sin plt.show() ni input(); todo se guarda en la misma carpeta.
-- Exportar MP4 usando estrictamente imageio_ffmpeg (ffmpeg real por stdin).
-- BC: Neumann (∂x ψ = 0) en x=±20.
-- Ecuación adimensional: ∂t ψ = i [ α ∂xx − V(x) ] ψ, con α=0.1.
-"""
-
-import os
 import numpy as np
 import matplotlib
 matplotlib.use("Agg")
