@@ -1,0 +1,8 @@
+brusselator_oscila
+Modelo: brusselator.
+Parámetros: α=0.00028, β=0.05, L=3.0, N=128.
+Discretización: dx=0.0234375, dt=0.00137329, método=heun, pasos=8739.
+Condiciones de frontera: periódicas. CI: ruido gaussiano σ=0.02, semilla=5.
+Funciones: F=1.0-(3.2+1)u+u^2 v;  G=3.2u-u^2 v
+Constantes: α=0.00028, β=0.05, A=1.0, B=3.2
+Extra (modelo): {'A': 1.0, 'B': 3.2}

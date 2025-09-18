@@ -1,0 +1,8 @@
+laberintos_slide
+Modelo: slide.
+Parámetros: α=0.00028, β=0.05, L=3.0, N=128.
+Discretización: dx=0.0234375, dt=0.00137329, método=heun, pasos=10923.
+Condiciones de frontera: periódicas. CI: ruido gaussiano σ=0.02, semilla=7.
+Funciones: F(u,v)=u-u^3-v-0.05;  G(u,v)=10(u-v)
+Constantes: α=0.00028, β=0.05
+Extra (modelo): {}

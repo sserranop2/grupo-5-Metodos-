@@ -1,290 +1,280 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Punto_1.py — Schrödinger 1D (PDE por DF) con Crank–Nicolson + Neumann.
-Genera 1.a.mp4, 1.a.pdf, 1.b.mp4 y 1.c.mp4 usando ffmpeg real (imageio-ffmpeg).
-Sin plt.show(), sin inputs.
+Punto_1.py — Evolución temporal (Schrödinger 1D) con método de líneas.
+Genera:
+  - 1.a.mp4  y 1.a.pdf   (oscilador "armónico": V(x) = -x^2/50)
+  - 1.b.mp4              (oscilador cuártico:   V(x) = (x/5)^4)
+  - 1.c.mp4  y 1.c.pdf   (potencial sombrero:  V(x) = (1/50)*(x^4/100 - x^2))
+
+Requisitos del taller:
+- Sin plt.show() ni input(); todo se guarda en la misma carpeta.
+- Exportar MP4 usando estrictamente imageio_ffmpeg (ffmpeg real por stdin).
+- BC: Neumann (∂x ψ = 0) en x=±20.
+- Ecuación adimensional: ∂t ψ = i [ α ∂xx − V(x) ] ψ, con α=0.1.
 """
 
-import os, shutil, sys, subprocess
+import os
 import numpy as np
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-from scipy.sparse import diags, eye
-from scipy.sparse.linalg import splu
+from matplotlib.backends.backend_agg import FigureCanvasAgg as FigureCanvas
+from scipy.sparse import diags
+from scipy.integrate import solve_ivp, trapezoid
 import imageio_ffmpeg
 
-# ================= CONFIG VIDEO (ffmpeg real) =================
-FFMPEG_PATH = imageio_ffmpeg.get_ffmpeg_exe()
-REQUIRE_MP4 = True
+# ============================= PARÁMETROS GENERALES =============================
+ALPHA = 0.1
+XMIN, XMAX = -20.0, 20.0
+NPTS = 801                    # dx ≈ 0.05
+TOL_R = 1e-6
+TOL_A = 1e-9
+MAX_STEP = 0.1
+FPS = 30
 
-# ----------------------------------------------------------------
-# Utilidad común para guardar MP4 con ffmpeg real por stdin
-def save_mp4_ffmpeg(xs, dens_list, t_list, V, fname="out.mp4", fps=30,
-                    xmin=-20, xmax=20, title_prefix=""):
+# Tiempos y #frames (≈ duración 10–15 s)
+T_END_A = 150.0; NFR_A = 450
+T_END_B = 50.0;  NFR_B = 300
+T_END_C = 150.0; NFR_C = 450
 
-    # 1280x720 exacto
-    dpi = 160
-    fig = plt.figure(figsize=(8, 4.5), dpi=dpi, constrained_layout=True)
-    ax  = fig.add_subplot(111)
-    ax.set_xlim(xmin, xmax)
-    ymax0 = max(1e-6, 1.05*np.max(dens_list[0]))
-    ax.set_ylim(0.0, ymax0)
-    ax.set_xlabel("x"); ax.set_ylabel(r"$|\psi|^2$")
-    title = ax.set_title("")
-    line, = ax.plot(xs, dens_list[0], lw=2)
+# Dimensiones pares para evitar errores de ffmpeg (8*144=1152, 4.5*144=648)
+FIG_DPI = 144
+FIG_SIZE = (8.0, 4.5)
 
-    # potencial reescalado (referencia visual)
-    V_scaled = (V - V.min()) / (V.max()-V.min()+1e-12) * (0.9*ymax0)
-    ax.plot(xs, V_scaled, ls="--", lw=1, alpha=0.6, label="V(x) (esc.)")
-    ax.legend(loc="upper right", frameon=False)
+# ============================ UTILIDADES NUMÉRICAS ==============================
+def grid_and_matrices(npts=NPTS, xmin=XMIN, xmax=XMAX):
+    """Malla 1D y Laplaciano con BC Neumann como matriz dispersa CSR."""
+    x = np.linspace(xmin, xmax, npts, dtype=float)
+    dx = x[1] - x[0]
+    main = -2.0 * np.ones(npts)
+    off = 1.0 * np.ones(npts-1)
+    L = diags([off, main, off], offsets=[-1, 0, 1], format="lil")
+    # Neumann en bordes (segunda derivada consistente):
+    L[0, 0] = -2.0; L[0, 1] = 2.0
+    L[-1, -2] = 2.0; L[-1, -1] = -2.0
+    L = (L.tocsr()) / (dx*dx)
+    return x, dx, L
 
-    fig.canvas.draw()
-    width, height = fig.canvas.get_width_height()
-    assert width == 1280 and height == 720, f"Canvas {width}x{height} ≠ 1280x720"
+def V_harmonic(x):
+    return -(x**2)/50.0
 
-    # Abrimos ffmpeg y le pipeamos frames RGB24
+def V_quartic(x):
+    return (x/5.0)**4
+
+def V_hat(x):
+    return (1.0/50.0)*((x**4)/100.0 - x**2)
+
+def psi0_gaussian(x, x0=10.0, k0=2.0, width_coeff=2.0):
+    """Paquete gaussiano con componente de fase (momento hacia -x)."""
+    env = np.exp(-width_coeff * (x - x0)**2)
+    phase = np.exp(-1j * k0 * x)
+    psi = env * phase
+    # Normaliza a probabilidad 1 con scipy.integrate.trapezoid
+    norm = trapezoid(np.abs(psi)**2, x)
+    return psi / np.sqrt(norm)
+
+def build_rhs(L, Vx):
+    """f(t, ψ) = i [ ALPHA*L − diag(V) ] ψ para solve_ivp."""
+    def rhs(_t, psi):
+        return 1j * (ALPHA * (L @ psi) - Vx * psi)
+    return rhs
+
+# ============================ VIDEO CON FFMPEG REAL =============================
+def ffmpeg_writer(width, height, fps, out_path):
+    """Crea proceso ffmpeg (log mínimo) para recibir frames RGB por stdin."""
+    ffmpeg_path = imageio_ffmpeg.get_ffmpeg_exe()
     cmd = [
-        FFMPEG_PATH, "-y",
-        "-f", "rawvideo", "-vcodec", "rawvideo",
+        ffmpeg_path,
+        "-loglevel", "error",         # solo errores
+        "-y",
+        "-f", "rawvideo",
+        "-vcodec", "rawvideo",
         "-pix_fmt", "rgb24",
         "-s", f"{width}x{height}",
         "-r", str(fps),
-        "-i", "-",                 # stdin
+        "-i", "-",
         "-an",
         "-vcodec", "libx264",
         "-pix_fmt", "yuv420p",
-        "-b:v", "2000k",
-        "-movflags", "+faststart",
-        fname,
+        out_path,
     ]
+    import subprocess
     proc = subprocess.Popen(cmd, stdin=subprocess.PIPE)
+    return proc, proc.stdin
 
-    def write_frame():
-        fig.canvas.draw()
-        buf = np.frombuffer(fig.canvas.buffer_rgba(), dtype=np.uint8)
-        buf = buf.reshape((height, width, 4))[:, :, :3]  # RGB
-        proc.stdin.write(buf.tobytes())
+def to_even_dims(arr_rgb):
+    """Asegura ancho/alto pares con padding negro si es necesario."""
+    h, w, _ = arr_rgb.shape
+    h2 = h + (h & 1)
+    w2 = w + (w & 1)
+    if (h2, w2) == (h, w):
+        return arr_rgb, w, h
+    pad = ((0, h2 - h), (0, w2 - w), (0, 0))
+    arr2 = np.pad(arr_rgb, pad, mode='constant')
+    return arr2, w2, h2
 
-    # primer frame
-    line.set_ydata(dens_list[0])
-    title.set_text(f"{title_prefix}t = {t_list[0]:.2f}")
-    write_frame()
+def render_video(x, times, psi_t, Vx, out_mp4, ylim=None, title=None):
+    """
+    Genera MP4 con |ψ|^2 (eje Y izquierdo) y el potencial V(x) (eje Y derecho).
+    Usa ffmpeg real (imageio_ffmpeg) y asegura dimensiones pares.
+    """
+    fig = plt.figure(figsize=FIG_SIZE, dpi=FIG_DPI)
+    canvas = FigureCanvas(fig)
+    ax = fig.add_subplot(1,1,1)
+    ax2 = ax.twinx()  # eje para el potencial
 
-    # resto de frames (Y dinámica hacia arriba como en tu versión)
-    ymax = ymax0
-    for tk, Pk in zip(t_list[1:], dens_list[1:]):
-        ymax = max(ymax, float(np.max(Pk)))
-        ax.set_ylim(0.0, max(1e-6, 1.05*ymax))
-        line.set_data(xs, Pk)
-        title.set_text(f"{title_prefix}t = {tk:.2f}")
-        write_frame()
+    # Densidad inicial
+    y0 = np.abs(psi_t[:,0])**2
+    line_prob, = ax.plot(x, y0, lw=2, label=r"$|\psi|^2$")
 
-    proc.stdin.close()
-    proc.wait()
+    # Potencial (estático)
+    line_V, = ax2.plot(x, Vx, ls="--", lw=1.5, alpha=0.9, label=r"$V(x)$")
+
+    ax.set_xlabel("x")
+    ax.set_ylabel(r"$|\psi(t,x)|^2$")
+    ax2.set_ylabel(r"$V(x)$")
+
+    if ylim is None:
+        ymax = float(1.1*np.max(np.abs(psi_t)**2))
+        if not np.isfinite(ymax) or ymax <= 0:
+            ymax = 1.0
+        ax.set_ylim(0, ymax)
+    else:
+        ax.set_ylim(*ylim)
+
+    # Escala del potencial acorde a sus valores
+    Vmin, Vmax = float(np.min(Vx)), float(np.max(Vx))
+    if Vmin == Vmax:
+        Vmin, Vmax = Vmin - 1.0, Vmax + 1.0
+    ax2.set_ylim(Vmin, Vmax)
+
+    ax.set_xlim(x[0], x[-1])
+
+    if title:
+        ax.set_title(title)
+
+    # Leyenda combinada
+    h1, l1 = ax.get_legend_handles_labels()
+    h2, l2 = ax2.get_legend_handles_labels()
+    ax.legend(h1+h2, l1+l2, loc="upper right", framealpha=0.6)
+
+    fig.tight_layout()
+    canvas.draw()
+
+    # Frame 0 y dimensiones pares
+    frame = np.asarray(canvas.buffer_rgba(), dtype=np.uint8)
+    H, W = fig.canvas.get_width_height()[1], fig.canvas.get_width_height()[0]
+    frame = frame.reshape(H, W, 4)[..., :3]
+    frame, W_even, H_even = to_even_dims(frame)
+
+    proc, pipe = ffmpeg_writer(W_even, H_even, FPS, out_mp4)
+
+    try:
+        # Enviamos primer frame
+        pipe.write(frame.tobytes())
+
+        for k, t in enumerate(times[1:], start=1):
+            y = np.abs(psi_t[:,k])**2
+            line_prob.set_ydata(y)
+            if title:
+                ax.set_title(f"{title} — t={t:6.2f}")
+            canvas.draw()
+            fr = np.asarray(canvas.buffer_rgba(), dtype=np.uint8).reshape(H, W, 4)[..., :3]
+            if (H % 2) or (W % 2):
+                fr, _, _ = to_even_dims(fr)
+            pipe.write(fr.tobytes())
+    finally:
+        try:
+            pipe.close()
+        except Exception:
+            pass
+        proc.wait()
+        plt.close(fig)
+
+# ============================ MÉTRICAS (μ, σ) ==================================
+def mu_sigma_over_time(x, psi_t):
+    """Devuelve mu(t), sigma(t) evaluados en snapshots ψ(x,t_k)."""
+    dens = np.abs(psi_t)**2
+    # Re-normaliza cada snapshot por seguridad numérica
+    norm = trapezoid(dens, x, axis=0)
+    dens = dens / norm
+    mu = trapezoid(x[:,None]*dens, x, axis=0)
+    x2 = trapezoid((x[:,None]**2)*dens, x, axis=0)
+    sigma = np.sqrt(np.maximum(x2 - mu**2, 0.0))
+    return mu, sigma
+
+def save_mu_sigma_pdf(times, mu, sigma, out_pdf, title):
+    fig, ax = plt.subplots(figsize=(8,4.0), dpi=150)
+    ax.plot(times, mu, lw=2, label=r"$\mu(t)=\langle x\rangle$")
+    ax.fill_between(times, mu - sigma, mu + sigma, alpha=0.25, label=r"$\mu\pm\sigma$")
+    ax.set_xlabel("t")
+    ax.set_ylabel("posición / intervalo")
+    ax.set_title(title)
+    ax.legend(loc="best")
+    fig.tight_layout()
+    fig.savefig(out_pdf, bbox_inches="tight")
     plt.close(fig)
 
-# =============================================================
-# =============== 1.a — Oscilador armónico ====================
-# =============================================================
-alpha = 0.1
-xmin, xmax = -20.0, 20.0
-Nx = 2001
-x  = np.linspace(xmin, xmax, Nx)
-dx = (xmax - xmin) / (Nx - 1)
+# ============================ PIPELINE DE SIMULACIÓN ============================
+def simulate_case(V_func, t_end, nframes, out_mp4, out_pdf=None, title=""):
+    x, _dx, L = grid_and_matrices()
+    Vx = V_func(x).astype(float)
 
-t0, t_end = 0.0, 150.0
-dt = 0.05
-n_steps = int(round((t_end - t0) / dt))
-times   = np.linspace(t0, t_end, n_steps + 1)
+    # Condición inicial gaussiana con “momento” hacia -x
+    psi0 = psi0_gaussian(x, x0=10.0, k0=2.0, width_coeff=2.0)
 
-# *** CORRECCIÓN CLAVE: potencial CONFINANTE ***
-V = -(x**2) / 50.0
+    # RHS lineal (MOL)
+    rhs = build_rhs(L, Vx)
 
-# Estado inicial (igual que el tuyo)
-psi = np.exp(-2.0 * (x - 10.0)**2) * np.exp(-1j * 2.0 * x)
-psi /= np.sqrt(np.trapezoid(np.abs(psi)**2, x))
+    # Tiempos de evaluación (y frames)
+    t_eval = np.linspace(0.0, float(t_end), int(nframes), dtype=float)
 
-# Operador espacial (Neumann)
-def laplacian_1d_neumann(N, dx):
-    main = -2.0 * np.ones(N)
-    off  =  1.0 * np.ones(N-1)
-    L = diags([off, main, off], [-1, 0, 1]).tolil()
-    # Ghost points: ∂xψ=0 => ψ[-1]=ψ[1], ψ[N]=ψ[N-2]
-    L[0, 1]   = 2.0;  L[0, 0]   = -2.0
-    L[-1, -2] = 2.0;  L[-1, -1] = -2.0
-    return (L / dx**2).tocsr()
+    # Integración temporal
+    sol = solve_ivp(rhs, (0.0, float(t_end)), psi0, t_eval=t_eval,
+                    method="RK45", rtol=TOL_R, atol=TOL_A, max_step=MAX_STEP)
 
-Lop = laplacian_1d_neumann(Nx, dx)
-H   = (-alpha) * Lop + diags(V, 0, shape=(Nx, Nx), format="csr")
+    if not sol.success:
+        raise RuntimeError(f"solve_ivp no convergió: {sol.message}")
 
-# Crank–Nicolson
-I = eye(Nx, format="csr")
-A = (I + (1j * dt / 2.0) * H).tocsc()
-B = (I - (1j * dt / 2.0) * H).tocsr()
-A_lu = splu(A)
+    psi_t = sol.y  # shape (NPTS, NT)
 
-# Observables
-def moments(x, psi):
-    rho = np.abs(psi)**2
-    mass = np.trapezoid(rho, x)
-    mu   = np.trapezoid(x * rho, x) / mass
-    var  = np.trapezoid((x - mu)**2 * rho, x) / mass
-    return mu, np.sqrt(var)
+    # Re-normaliza snapshots para métricas/visualización
+    dens = np.abs(psi_t)**2
+    norm = trapezoid(dens, x, axis=0)
+    psi_t = psi_t / np.sqrt(norm)[None, :]
 
-mu_hist = np.zeros(n_steps + 1)
-sg_hist = np.zeros(n_steps + 1)
-mu_hist[0], sg_hist[0] = moments(x, psi)
+    # Video con potencial
+    render_video(x, sol.t, psi_t, Vx, out_mp4, title=title)
 
-# Storage
-target_frames = 600
-k_frame = max(1, n_steps // target_frames)
-storage_t = []; storage_rho = []
-def record(t, psi):
-    storage_t.append(float(t))
-    storage_rho.append(np.abs(psi)**2)
-record(times[0], psi)
+    # Métricas
+    if out_pdf is not None:
+        mu, sigma = mu_sigma_over_time(x, psi_t)
+        save_mu_sigma_pdf(sol.t, mu, sigma, out_pdf, title + r" — $\mu$ y $\sigma$")
 
-# Progreso
-def progress(n, total):
-    width = 30
-    done = int(width * n / total)
-    sys.stdout.write("\r[" + "#"*done + "-"*(width-done) + f"] {n}/{total}")
-    sys.stdout.flush()
+# ================================== MAIN =======================================
+def main():
+    # 1.a — Oscilador “armónico” (según enunciado)
+    simulate_case(
+        V_func=V_harmonic, t_end=T_END_A, nframes=NFR_A,
+        out_mp4="1.a.mp4", out_pdf="1.a.pdf",
+        title=r"1.a  $V(x)=-x^2/50$"
+    )
 
-# Evolución
-for n in range(1, n_steps + 1):
-    rhs = B.dot(psi)
-    psi = A_lu.solve(rhs)
-    psi /= np.sqrt(np.trapezoid(np.abs(psi)**2, x))
-    mu_hist[n], sg_hist[n] = moments(x, psi)
-    if n % k_frame == 0:
-        record(times[n], psi)
-    if n % max(1, n_steps//100) == 0:
-        progress(n, n_steps)
-progress(n_steps, n_steps); print()
+    # 1.b — Oscilador cuártico (solo video)
+    simulate_case(
+        V_func=V_quartic, t_end=T_END_B, nframes=NFR_B,
+        out_mp4="1.b.mp4", out_pdf=None,
+        title=r"1.b  $V(x)=(x/5)^4$"
+    )
 
-# Video 1.a
-save_mp4_ffmpeg(x, storage_rho, storage_t, V, fname="1.a.mp4", fps=30,
-                xmin=xmin, xmax=xmax, title_prefix="")
+    # 1.c — Potencial del sombrero (video + gráfica μ,σ)
+    simulate_case(
+        V_func=V_hat, t_end=T_END_C, nframes=NFR_C,
+        out_mp4="1.c.mp4", out_pdf="1.c.pdf",
+        title=r"1.c  $V(x)=\frac{1}{50}\!\left(\frac{x^4}{100}-x^2\right)$"
+    )
 
-# PDF 1.a (título consistente con el V usado)
-plt.figure(figsize=(7.5, 4.5))
-plt.plot(times, mu_hist, lw=2, label=r"$\mu(t)=\langle x\rangle$")
-plt.fill_between(times, mu_hist - sg_hist, mu_hist + sg_hist,
-                 color="C0", alpha=0.2, label=r"$\mu\pm\sigma$")
-plt.xlabel("t"); plt.ylabel(r"$\langle x\rangle$ y banda $\mu\pm\sigma$")
-plt.title(r"Paquete en $V(x)=+x^2/50$,  $\alpha=0.1$")
-plt.grid(True, alpha=0.25); plt.legend(frameon=False)
-plt.savefig("1.a.pdf", bbox_inches="tight"); plt.close()
-
-# =============================================================
-# ================== 1.b — Oscilador cuártico =================
-# =============================================================
-alpha = 0.1
-xmin, xmax = -20.0, 20.0
-Nx = 2001
-x  = np.linspace(xmin, xmax, Nx)
-dx = (xmax - xmin) / (Nx - 1)
-
-# *** enunciado: simular hasta t=50 ***
-t0, t_end = 0.0, 50.0
-dt = 0.05
-n_steps = int(round((t_end - t0) / dt))
-times   = np.linspace(t0, t_end, n_steps + 1)
-
-# *** cuártico tal como se pidió ***
-V = (x/5.0)**4
-
-psi = np.exp(-2.0 * (x - 10.0)**2) * np.exp(-1j * 2.0 * x)
-psi /= np.sqrt(np.trapezoid(np.abs(psi)**2, x))
-
-Lop = laplacian_1d_neumann(Nx, dx)
-H   = (-alpha) * Lop + diags(V, 0, shape=(Nx, Nx), format="csr")
-I   = eye(Nx, format="csr")
-A   = (I + (1j * dt / 2.0) * H).tocsc()
-B   = (I - (1j * dt / 2.0) * H).tocsr()
-A_lu = splu(A)
-
-target_frames = 600
-k_frame = max(1, n_steps // target_frames)
-storage_t = []; storage_rho = []
-record = lambda t, psi: (storage_t.append(float(t)),
-                         storage_rho.append(np.abs(psi)**2))
-record(times[0], psi)
-
-for n in range(1, n_steps + 1):
-    rhs = B.dot(psi); psi = A_lu.solve(rhs)
-    psi /= np.sqrt(np.trapezoid(np.abs(psi)**2, x))
-    if n % k_frame == 0:
-        record(times[n], psi)
-    if n % max(1, n_steps//100) == 0:
-        progress(n, n_steps)
-progress(n_steps, n_steps); print()
-
-save_mp4_ffmpeg(x, storage_rho, storage_t, V, fname="1.b.mp4", fps=30,
-                xmin=xmin, xmax=xmax, title_prefix="")
-
-# =============================================================
-# ================= 1.c — Potencial “sombrero” =================
-# =============================================================
-alpha = 0.1
-xmin, xmax = -20.0, 20.0
-Nx = 2001
-x  = np.linspace(xmin, xmax, Nx)
-dx = (xmax - xmin) / (Nx - 1)
-
-t0, t_end = 0.0, 150.0
-dt = 0.05
-n_steps = int(round((t_end - t0) / dt))
-times   = np.linspace(t0, t_end, n_steps + 1)
-
-# Doble pozo (sombrero) — tu forma
-V = (1.0/50.0) * ((x**4)/100.0 - x**2)
-
-psi = np.exp(-2.0 * (x - 10.0)**2) * np.exp(-1j * 2.0 * x)
-psi /= np.sqrt(np.trapezoid(np.abs(psi)**2, x))
-
-Lop = laplacian_1d_neumann(Nx, dx)
-H   = (-alpha) * Lop + diags(V, 0, shape=(Nx, Nx), format="csr")
-I   = eye(Nx, format="csr")
-A   = (I + (1j * dt / 2.0) * H).tocsc()
-B   = (I - (1j * dt / 2.0) * H).tocsr()
-A_lu = splu(A)
-
-mu_hist = np.zeros(n_steps + 1)
-sg_hist = np.zeros(n_steps + 1)
-
-target_frames = 600
-k_frame = max(1, n_steps // target_frames)
-storage_t = []; storage_rho = []
-def record(t, psi):
-    storage_t.append(float(t))
-    storage_rho.append(np.abs(psi)**2)
-record(times[0], psi)
-
-for n in range(1, n_steps + 1):
-    rhs = B.dot(psi); psi = A_lu.solve(rhs)
-    psi /= np.sqrt(np.trapezoid(np.abs(psi)**2, x))
-    mu_hist[n], sg_hist[n] = moments(x, psi)
-    if n % k_frame == 0:
-        record(times[n], psi)
-    if n % max(1, n_steps//100) == 0:
-        progress(n, n_steps)
-progress(n_steps, n_steps); print()
-
-save_mp4_ffmpeg(x, storage_rho, storage_t, V, fname="1.c.mp4", fps=30,
-                xmin=xmin, xmax=xmax, title_prefix="")
-
-# PDF 1.c (título consistente)
-plt.figure(figsize=(7.5, 4.5))
-plt.plot(times, mu_hist, lw=2, label=r"$\mu(t)=\langle x\rangle$")
-plt.fill_between(times, mu_hist - sg_hist, mu_hist + sg_hist,
-                 color="C0", alpha=0.2, label=r"$\mu\pm\sigma$")
-plt.xlabel("t"); plt.ylabel(r"$\langle x\rangle$ y banda $\mu\pm\sigma$")
-plt.title(r"Paquete en $V(x)=\frac{1}{50}\!\left(\frac{x^4}{100}-x^2\right)$,  $\alpha=0.1$")
-plt.grid(True, alpha=0.25); plt.legend(frameon=False)
-plt.savefig("1.c.pdf", bbox_inches="tight"); plt.close()
-
-print("OK → 1.a.mp4, 1.a.pdf, 1.b.mp4, 1.c.mp4 y 1.c.pdf generados.")
+if __name__ == "__main__":
+    np.random.seed(0)
+    main()
