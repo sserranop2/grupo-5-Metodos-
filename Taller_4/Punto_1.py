@@ -46,7 +46,7 @@ def V_quartic(x):
     return (x/5.0)**4
 
 def V_hat(x):
-    return (1.0/50.0)*((x**4)/100.0 - x**2)
+    return (1.0/50.0)*((x**4)/100.0- x**2)
 
 def psi0_gaussian(x, x0=10.0, k0=2.0, width_coeff=2.0):
     """Paquete gaussiano con componente de fase (momento hacia -x)."""
@@ -239,13 +239,13 @@ def main():
     simulate_case(
         V_func=V_harmonic, t_end=T_END_A, nframes=NFR_A,
         out_mp4="1.a.mp4", out_pdf="1.a.pdf",
-        title=r"1.a  $V(x)=-x^2/50$"
+        title=r"1.a  $V(x)=x^2/50$"
     )
 
     # 1.b — Oscilador cuártico (solo video)
     simulate_case(
         V_func=V_quartic, t_end=T_END_B, nframes=NFR_B,
-        out_mp4="1.b.mp4", out_pdf=None,
+        out_mp4="1.b.mp4", out_pdf="1.b.pdf",
         title=r"1.b  $V(x)=(x/5)^4$"
     )
 
