@@ -7,7 +7,7 @@ from scipy.sparse import diags
 from scipy.integrate import solve_ivp, trapezoid
 import imageio_ffmpeg
 
-# ============================= PARÁMETROS GENERALES =============================
+#  PARÁMETROS GENERALES 
 ALPHA = 0.1
 XMIN, XMAX = -20.0, 20.0
 NPTS = 801                    # dx ≈ 0.05
@@ -25,7 +25,7 @@ T_END_C = 150.0; NFR_C = 450
 FIG_DPI = 144
 FIG_SIZE = (8.0, 4.5)
 
-# ============================ UTILIDADES NUMÉRICAS ==============================
+# UTILIDADES NUMÉRICAS 
 def grid_and_matrices(npts=NPTS, xmin=XMIN, xmax=XMAX):
     """Malla 1D y Laplaciano con BC Neumann como matriz dispersa CSR."""
     x = np.linspace(xmin, xmax, npts, dtype=float)
@@ -63,9 +63,8 @@ def build_rhs(L, Vx):
         return 1j * (ALPHA * (L @ psi) - Vx * psi)
     return rhs
 
-# ============================ VIDEO CON FFMPEG REAL =============================
+# VIDEO CON FFMPEG 
 def ffmpeg_writer(width, height, fps, out_path):
-    """Crea proceso ffmpeg (log mínimo) para recibir frames RGB por stdin."""
     ffmpeg_path = imageio_ffmpeg.get_ffmpeg_exe()
     cmd = [
         ffmpeg_path,
@@ -100,7 +99,6 @@ def to_even_dims(arr_rgb):
 def render_video(x, times, psi_t, Vx, out_mp4, ylim=None, title=None):
     """
     Genera MP4 con |ψ|^2 (eje Y izquierdo) y el potencial V(x) (eje Y derecho).
-    Usa ffmpeg real (imageio_ffmpeg) y asegura dimensiones pares.
     """
     fig = plt.figure(figsize=FIG_SIZE, dpi=FIG_DPI)
     canvas = FigureCanvas(fig)
@@ -175,7 +173,7 @@ def render_video(x, times, psi_t, Vx, out_mp4, ylim=None, title=None):
         proc.wait()
         plt.close(fig)
 
-# ============================ MÉTRICAS (μ, σ) ==================================
+# MÉTRICAS (μ, σ)
 def mu_sigma_over_time(x, psi_t):
     """Devuelve mu(t), sigma(t) evaluados en snapshots ψ(x,t_k)."""
     dens = np.abs(psi_t)**2
@@ -192,14 +190,14 @@ def save_mu_sigma_pdf(times, mu, sigma, out_pdf, title):
     ax.plot(times, mu, lw=2, label=r"$\mu(t)=\langle x\rangle$")
     ax.fill_between(times, mu - sigma, mu + sigma, alpha=0.25, label=r"$\mu\pm\sigma$")
     ax.set_xlabel("t")
-    ax.set_ylabel("posición / intervalo")
+    ax.set_ylabel(r"$\mu \pm \sigma$")
     ax.set_title(title)
     ax.legend(loc="best")
     fig.tight_layout()
     fig.savefig(out_pdf, bbox_inches="tight")
     plt.close(fig)
 
-# ============================ PIPELINE DE SIMULACIÓN ============================
+# PIPELINE DE SIMULACIÓN 
 def simulate_case(V_func, t_end, nframes, out_mp4, out_pdf=None, title=""):
     x, _dx, L = grid_and_matrices()
     Vx = V_func(x).astype(float)
@@ -235,9 +233,9 @@ def simulate_case(V_func, t_end, nframes, out_mp4, out_pdf=None, title=""):
         mu, sigma = mu_sigma_over_time(x, psi_t)
         save_mu_sigma_pdf(sol.t, mu, sigma, out_pdf, title + r" — $\mu$ y $\sigma$")
 
-# ================================== MAIN =======================================
+#  MAIN 
 def main():
-    # 1.a — Oscilador “armónico” (según enunciado)
+    # 1.a — Oscilador “armónico” 
     simulate_case(
         V_func=V_harmonic, t_end=T_END_A, nframes=NFR_A,
         out_mp4="1.a.mp4", out_pdf="1.a.pdf",
