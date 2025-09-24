@@ -1,0 +1,14 @@
+=== Punto 2.a — Sistema determinista ===
+A (U creados por día) = 1000.000000
+B (extracción Pu por día) = 20.000000
+T1/2(U-239)  = 23.4000 min = 0.01625000 días
+T1/2(Np-239) = 2.360000 días
+λ_U  = 42.65521111 1/día
+λ_Np = 0.29370643 1/día
+
+Estado estable analítico (f=0):
+U*  = 23.44379441
+Np* = 3404.76029650
+Pu* = 50.00000000
+
+Tiempo estimado a cuasi-estacionariedad: t* ≈ 27.157333 días

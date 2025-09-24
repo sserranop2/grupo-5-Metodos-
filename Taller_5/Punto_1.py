@@ -121,7 +121,6 @@ BETA_GRID_COARSE = np.concatenate([np.arange(0.10, 0.36, 0.02),
                                    np.arange(0.52, 0.91, 0.02)])
 BETA_GRID        = np.unique(np.round(np.concatenate([BETA_GRID_COARSE, BETA_GRID_FINE]), 5))
 
-# Barridos para equilibrio/medición (puedes afinarlos; ya van más rápido)
 EQ_SWEEPS_FIRST  = 250
 EQ_SWEEPS_NEXT   = 100
 MEAS_SAMPLES     = 2000
@@ -140,7 +139,7 @@ def build_pbc_index(N):
     return ip, im
 
 @njit
-def metropolis_sweeps_fast(spins, beta, J, nsweeps, eps, M, ip, im):
+def metropolis_sweeps(spins, beta, J, nsweeps, eps, M, ip, im):
     """
     nsweeps barridos Metrópolis con:
       - LUT de aceptación (solo exp4 y exp8)
@@ -170,7 +169,6 @@ def metropolis_sweeps_fast(spins, beta, J, nsweeps, eps, M, ip, im):
             elif dH == 8.0 * J:
                 accept = (np.random.random() < exp8)
             else:
-                # (para robustez; no debería ocurrir)
                 accept = (np.random.random() < np.exp(-beta * dH))
 
             if accept:
@@ -181,26 +179,26 @@ def metropolis_sweeps_fast(spins, beta, J, nsweeps, eps, M, ip, im):
     return eps, M
 
 @njit
-def mc_energy_sweeps(spins, beta, J, eq_sweeps, samples, stride_sweeps, ip, im):
+def mc_energia_sweeps(spins, beta, J, eq_sweeps, samples, stride_sweeps, ip, im):
     """
     Equilibra eq_sweeps barridos y luego toma 'samples' mediciones de energía
     separadas por 'stride_sweeps' barridos. Devuelve la serie de energías normalizadas.
     """
     N   = spins.shape[0]
-    eps = energia_total(spins, J)  # ε (doble conteo) consistente con 1.a
+    eps = energia_total(spins, J)  # ε (doble conteo) 
     M   = np.int64(spins.sum())
     # burn-in
-    eps, M = metropolis_sweeps_fast(spins, beta, J, eq_sweeps, eps, M, ip, im)
+    eps, M = metropolis_sweeps(spins, beta, J, eq_sweeps, eps, M, ip, im)
     # medición
     Es = np.empty(samples, dtype=np.float64)
     normE = 4.0 * N * N
     for k in range(samples):
-        eps, M = metropolis_sweeps_fast(spins, beta, J, stride_sweeps, eps, M, ip, im)
+        eps, M = metropolis_sweeps(spins, beta, J, stride_sweeps, eps, M, ip, im)
         Es[k] = eps / normE
     return Es
 
 def simulacion_1b():
-    np.random.seed()  # independiente de 1.a
+    np.random.seed()  
     spins = random_spins(N)   # estado inicial aleatorio (~β=0)
     ip, im = build_pbc_index(N)
     Cv = np.empty(BETA_GRID.shape[0], dtype=np.float64)
@@ -213,7 +211,7 @@ def simulacion_1b():
         if abs(beta - beta_c) < 0.03:
             eq_sweeps = max(eq_sweeps, EQ_SWEEPS_NEXT * 3)
 
-        Es = mc_energy_sweeps(spins, beta, J, eq_sweeps,
+        Es = mc_energia_sweeps(spins, beta, J, eq_sweeps,
                                          MEAS_SAMPLES, STRIDE_SWEEPS, ip, im)
         mu  = float(np.mean(Es))
         mu2 = float(np.mean(Es * Es))
@@ -232,5 +230,4 @@ def simulacion_1b():
     fig.savefig(FIGOUT_1B, bbox_inches="tight")
     plt.close(fig)
 
-# Llamar 1.b tras 1.a
 simulacion_1b()
