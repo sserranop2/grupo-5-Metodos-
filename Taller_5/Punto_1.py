@@ -8,7 +8,7 @@ from numba import njit
 #1.a Alcanzar el equilibrio 
 
 # Parámetros de simulación 
-N      = 250      # lado de la red (N x N)
+N      = 300      # lado de la red (N x N)
 J      = 1.0        # acoplamiento
 BETA   = 0.5        # β = 1/(kT)
 STEPS  = 250000    
