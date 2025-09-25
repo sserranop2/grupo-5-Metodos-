@@ -293,10 +293,6 @@ def simulacion_2b():
 
 simulacion_2b()
 
-
-
-
-
 #2.c Simulación exacta
 def gillespie_un_path(tmax, y0, rng):
     """
@@ -406,9 +402,7 @@ def simulacion_2c_multipagina(n_paths=5, archivo_pdf="2.c.pdf", seed=12345):
 simulacion_2c_multipagina()
 
 
-
 #2.d Probabilidad de concentración crítica
-
 # Parámetros del problema
 T_MAX_DAYS = 30.0
 PU_THRESHOLD = 80.0
