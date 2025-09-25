@@ -289,3 +289,114 @@ def simulacion_2b():
     print("2.b → 2.b.pdf generado con 5 trayectorias SDE + solución determinista.")
 
 simulacion_2b()
+
+# =========================
+# 2.c — Gillespie (5 trayectorias) + determinista
+# =========================
+
+def gillespie_un_path(tmax, y0, rng):
+    """
+    Reacciones (tasas en 1/día):
+      1) +U                 r1 = A_por_dia
+      2) U -> Np            r2 = lambda_U  * U
+      3) Np -> Pu           r3 = lambda_Np * Np
+      4) extracción de Pu   r4 = B_por_dia * Pu   (proporcional a Pu)
+    """
+    t = 0.0
+    y = np.array(y0, dtype=int)
+    ts = [0.0]
+    Ys = [y.copy()]
+
+    while t < tmax:
+        U, Np, Pu = y
+        r1 = A_por_dia
+        r2 = lambda_U  * max(U,  0)
+        r3 = lambda_Np * max(Np, 0)
+        r4 = B_por_dia * max(Pu, 0)
+
+        rates = np.array([r1, r2, r3, r4], dtype=float)
+        s = rates.sum()
+        if s <= 0.0:
+            break
+
+        # Tiempo al siguiente evento
+        tau = rng.exponential(1.0 / s)
+        t_next = t + tau
+        if t_next > tmax:
+            ts.append(tmax)
+            Ys.append(y.copy())
+            break
+
+        # Elegir reacción
+        r_idx = rng.choice(4, p=rates / s)
+
+        # Aplicar reacción
+        if r_idx == 0:          # creación U
+            y[0] += 1
+        elif r_idx == 1:        # U -> Np
+            if y[0] > 0:
+                y[0] -= 1; y[1] += 1
+        elif r_idx == 2:        # Np -> Pu
+            if y[1] > 0:
+                y[1] -= 1; y[2] += 1
+        elif r_idx == 3:        # extracción Pu
+            if y[2] > 0:
+                y[2] -= 1
+
+        t = t_next
+        ts.append(t)
+        Ys.append(y.copy())
+
+    return np.array(ts), np.array(Ys, dtype=float)
+
+
+def guardar_pdf_2c_multipagina(t_det, Y_det, paths, archivo_pdf="2.c.pdf"):
+    """
+    Crea un PDF multipágina:
+      - Página 1: U-239 (5 trayectorias + determinista)
+      - Página 2: Np-239
+      - Página 3: Pu-239
+    """
+    nombres = ["U-239", "Np-239", "Pu-239"]
+
+    with PdfPages(archivo_pdf) as pdf:
+        for i, nombre in enumerate(nombres):
+            fig, ax = plt.subplots(figsize=(8.5, 5.5))
+
+            # 5 trayectorias Gillespie
+            for ts, Ys in paths:
+                ax.step(ts, Ys[:, i], where='post', alpha=0.6, lw=1.0)
+
+            # Solución determinista encima
+            ax.plot(t_det, Y_det[:, i], lw=2.6, alpha=0.95, label="Determinista")
+
+            ax.set_title(f"2.c — {nombre}: 5 trayectorias (Gillespie) + determinista")
+            ax.set_xlabel("Tiempo [días]")
+            ax.set_ylabel(f"{nombre} [unid]")
+            ax.grid(True, alpha=0.3)
+            ax.legend(loc="best")
+
+            fig.tight_layout()
+            pdf.savefig(fig, bbox_inches="tight")
+            plt.close(fig)
+
+
+def simulacion_2c_multipagina(n_paths=5, archivo_pdf="2.c.pdf", seed=12345):
+    rng = np.random.default_rng(seed)
+
+    # Solución determinista
+    t_det, Y_det = integrar([U_inicial, Np_inicial, Pu_inicial], tiempo_final_dias)
+
+    # 5 trayectorias de Gillespie
+    paths = [gillespie_un_path(tiempo_final_dias,
+                               [U_inicial, Np_inicial, Pu_inicial],
+                               rng)
+             for _ in range(n_paths)]
+
+    # Guardar PDF multipágina
+    guardar_pdf_2c_multipagina(t_det, Y_det, paths, archivo_pdf=archivo_pdf)
+    print(f"2.c (multipágina) → {archivo_pdf} generado.")
+
+
+# Ejecutar 2.c
+simulacion_2c_multipagina()
