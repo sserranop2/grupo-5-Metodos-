@@ -1,0 +1,9 @@
+RESULTADOS DEL ANÁLISIS DE SOLITONES KdV (pseudo-espectral RFFT + RK4 + de-alias 2/3)
+======================================================================
+
+1) Coseno → tren de solitones; los más altos viajan más rápido.
+2) Colisión: interacción no lineal; tras la colisión reaparecen (con desfase).
+3) Conservación: masa, momento y energía casi constantes.
+4) δ controla el balance no linealidad–dispersión: δ² pequeño → más solitones.
+5) Solitón sech²: velocidad numérica ≃ A/3 (validación).
+6) CI suave que decae → dispersión sin solitones.

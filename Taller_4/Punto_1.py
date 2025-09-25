@@ -120,7 +120,7 @@ def render_video(x, times, psi_t, Vx, out_mp4, ylim=None, title=None):
         ymax = float(1.1*np.max(np.abs(psi_t)**2))
         if not np.isfinite(ymax) or ymax <= 0:
             ymax = 1.0
-        ax.set_ylim(0, ymax)
+        ax.set_ylim(-0.2, ymax)
     else:
         ax.set_ylim(*ylim)
 
