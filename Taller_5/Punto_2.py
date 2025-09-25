@@ -400,3 +400,4 @@ def simulacion_2c_multipagina(n_paths=5, archivo_pdf="2.c.pdf", seed=12345):
 
 # Ejecutar 2.c
 simulacion_2c_multipagina()
+#Prueba :) de funcionamiento
