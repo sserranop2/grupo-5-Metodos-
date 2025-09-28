@@ -1,7 +1,12 @@
-Punto 2.d — Probabilidad de alcanzar Pu >= 80 en [0, 30 días]
-Parámetros: A=1000 día^-1, B=20 día^-1, λ_U=42.6552 día^-1, λ_Np=0.293706 día^-1; U0=Np0=Pu0=10; Umbral=80; Horiz=30 días.
-- Determinista (2.a): trayectoria única → CRUZA (p≈100.000%).
-- SDE (2.b): k=1000, N=1000 → p̂=100.000% (SE=0.000%), IC95≈[100.000%, 100.000%]; Bayes (Beta[1+k,1+N−k]): media=99.900%, IC95≈[99.632%, 99.997%].
-- Gillespie (2.c): k=1000, N=1000 → p̂=100.000% (SE=0.000%), IC95≈[100.000%, 100.000%]; Bayes (Beta[1+k,1+N−k]): media=99.900%, IC95≈[99.632%, 99.997%].
+2.d — Probabilidad de concentración crítica (resultado en porcentajes)
+Definición de evento: alcanzar Pu >= 80.0 en cualquier instante dentro de 0–30.0 días.
+Intervalo frecuentista: aproximación normal (±1.96·SE). Bayes: posterior Beta(1+k, 1+N−k) con prior uniforme.
 
-Discusión breve: Las tres aproximaciones concuerdan cualitativamente en la dinámica ∅→U→Np→Pu con fuentes A y B; la SSA (Gillespie) sirve como ‘ground truth’ discreto, mientras que la SDE aproxima bien para poblaciones moderadas. El modelo determinista no entrega probabilidad (0%/100% según cruce), por lo que la incertidumbre se reporta solo para los enfoques estocásticos.
+[SDE (2.b)] N=1000, k=273
+  Frecuentista: p̂ = 27.30% ± 1.41%  (95% CI: 24.54%, 30.06%)
+  Bayes (Beta(1,1)): media = 27.35%  (95% CrI: 24.63%, 30.15%)
+
+[Gillespie (2.c)] N=1000, k=179
+  Frecuentista: p̂ = 17.90% ± 1.21%  (95% CI: 15.52%, 20.28%)
+  Bayes (Beta(1,1)): media = 17.96%  (95% CrI: 15.65%, 20.40%)
+
